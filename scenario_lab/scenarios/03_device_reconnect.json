@@ -1,0 +1,21 @@
+{
+  "name": "device_reconnect",
+  "description": "Wait condition survives Hub restart and resumes once device comes online",
+  "goal": "When ASUS comes online, notify me.",
+  "setup": {
+    "connected_devices": ["asus"],
+    "simulation": {
+      "type": "device_reconnect"
+    }
+  },
+  "expected": {
+    "final_goal_status": "COMPLETED",
+    "dispatched_commands": ["ui.notify"],
+    "survives_restart": true,
+    "no_duplicate_resume": true
+  },
+  "safety": {
+    "destructive_actions_require_approval": true,
+    "no_host_filesystem_access": true
+  }
+}

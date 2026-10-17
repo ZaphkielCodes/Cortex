@@ -1,0 +1,198 @@
+:root {
+    --bg-color: #121212;
+    --panel-bg: #1e1e1e;
+    --text-color: #e0e0e0;
+    --text-muted: #888;
+    --primary: #bb86fc;
+    --primary-hover: #9c60e0;
+    --border: #333;
+    --danger: #cf6679;
+    --success: #03dac6;
+    --sidebar-width: 250px;
+}
+
+body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.hidden { display: none !important; }
+
+/* Screens */
+.screen {
+    width: 100%;
+    height: 100%;
+    display: flex;
+}
+
+/* Login */
+#login-screen {
+    justify-content: center;
+    align-items: center;
+}
+
+.login-box {
+    background: var(--panel-bg);
+    padding: 40px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    width: 300px;
+    text-align: center;
+}
+
+.login-box input {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 15px;
+    border: 1px solid var(--border);
+    background: var(--bg-color);
+    color: var(--text-color);
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+button {
+    background: var(--primary);
+    color: #000;
+    border: none;
+    padding: 10px 20px;
+    cursor: pointer;
+    border-radius: 4px;
+    font-weight: bold;
+    width: 100%;
+}
+button:hover { background: var(--primary-hover); }
+
+.error-msg {
+    color: var(--danger);
+    margin-top: 10px;
+    font-size: 0.9em;
+}
+
+/* Sidebar */
+.sidebar {
+    width: var(--sidebar-width);
+    background: var(--panel-bg);
+    border-right: 1px solid var(--border);
+    padding: 20px 0;
+}
+
+.sidebar h2 {
+    padding: 0 20px;
+    margin-top: 0;
+    color: var(--primary);
+}
+
+.sidebar ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.sidebar li {
+    padding: 15px 20px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.sidebar li:hover { background: rgba(255, 255, 255, 0.05); }
+.sidebar li.active { background: rgba(187, 134, 252, 0.1); border-left: 4px solid var(--primary); padding-left: 16px; }
+.sidebar li.disabled { color: var(--text-muted); cursor: not-allowed; }
+
+.badge {
+    background: var(--danger);
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.8em;
+}
+
+/* Content */
+.content {
+    flex-grow: 1;
+    padding: 20px;
+    overflow-y: auto;
+}
+
+.view header {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+.view header h2 { margin: 0; }
+.btn-secondary { width: auto; background: var(--panel-bg); color: var(--text-color); border: 1px solid var(--border); margin-right: 15px; }
+
+/* Device Grid */
+.device-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 20px;
+}
+.device-card {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 15px;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+.device-card:hover { transform: translateY(-2px); border-color: var(--primary); }
+.device-card h3 { margin: 0 0 10px 0; }
+.status-indicator {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 8px;
+}
+.status-online { background: var(--success); }
+.status-offline { background: var(--danger); }
+
+/* Activity Table */
+.activity-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.activity-table th, .activity-table td {
+    text-align: left;
+    padding: 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* Approvals */
+.approval-card {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+.approval-actions { margin-top: 15px; display: flex; gap: 10px; }
+.btn-approve { background: var(--success); width: auto; }
+.btn-deny { background: var(--danger); width: auto; }
+
+/* Permissions */
+.perm-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+}
+.perm-row select {
+    background: var(--bg-color);
+    color: var(--text-color);
+    border: 1px solid var(--border);
+    padding: 5px;
+    border-radius: 4px;
+}

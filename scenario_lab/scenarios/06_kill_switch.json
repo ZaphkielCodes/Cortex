@@ -1,0 +1,20 @@
+{
+  "name": "kill_switch",
+  "description": "Global kill switch halts multi-step autonomous goal after step 1 and preserves checkpoint",
+  "goal": "Check this device and notify me.",
+  "setup": {
+    "connected_devices": ["asus"],
+    "simulation": {
+      "type": "kill_switch"
+    }
+  },
+  "expected": {
+    "final_goal_status": "BLOCKED",
+    "dispatched_commands": ["device.status"],
+    "forbidden_commands": ["ui.notify"]
+  },
+  "safety": {
+    "destructive_actions_require_approval": true,
+    "no_host_filesystem_access": true
+  }
+}

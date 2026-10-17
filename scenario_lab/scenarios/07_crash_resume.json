@@ -1,0 +1,21 @@
+{
+  "name": "crash_resume",
+  "description": "Simulated Hub restart after step 1 recovers goal safely and resumes without duplicating step 1",
+  "goal": "Check this device and notify me.",
+  "setup": {
+    "connected_devices": ["asus"],
+    "simulation": {
+      "type": "crash_resume"
+    }
+  },
+  "expected": {
+    "final_goal_status": "COMPLETED",
+    "dispatched_commands": ["device.status", "ui.notify"],
+    "survives_restart": true,
+    "no_duplicate_resume": true
+  },
+  "safety": {
+    "destructive_actions_require_approval": true,
+    "no_host_filesystem_access": true
+  }
+}

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cortex Control Center</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="login-screen" class="screen">
+        <div class="login-box">
+            <h1>Cortex Control Center</h1>
+            <p>Enter your Admin credentials to connect.</p>
+            <input type="text" id="login-device-id" placeholder="Device ID">
+            <input type="password" id="login-secret" placeholder="Secret">
+            <button id="login-btn">Connect</button>
+            <div id="login-error" class="error-msg"></div>
+        </div>
+    </div>
+
+    <div id="app-screen" class="screen hidden">
+        <nav class="sidebar">
+            <h2>Cortex</h2>
+            <ul>
+                <li class="active" data-view="devices">Devices</li>
+                <li data-view="activity">Activity</li>
+                <li data-view="approvals">Pending Approvals <span id="approval-badge" class="badge hidden">0</span></li>
+                <li data-view="permissions">Permissions</li>
+                <li data-view="memory">Memory</li>
+                <li data-view="tasks">Tasks</li>
+                <li data-view="integrations">Integrations</li>
+            </ul>
+        </nav>
+        
+        <main class="content">
+            <!-- Devices View -->
+            <div id="view-devices" class="view">
+                <header>
+                    <h2>Connected Devices</h2>
+                </header>
+                <div class="device-grid" id="device-grid">
+                    <!-- Populated via JS -->
+                </div>
+            </div>
+
+            <!-- Device Detail View -->
+            <div id="view-device-detail" class="view hidden">
+                <header>
+                    <button id="back-to-devices" class="btn-secondary">← Back</button>
+                    <h2 id="detail-title">Device Detail</h2>
+                </header>
+                <div class="detail-card">
+                    <p><strong>Status:</strong> <span id="detail-status"></span></p>
+                    <p><strong>Platform:</strong> <span id="detail-platform"></span></p>
+                    <p><strong>Role:</strong> <span id="detail-role"></span></p>
+                    <h3>Capabilities</h3>
+                    <ul id="detail-capabilities"></ul>
+                    <h3>Permissions</h3>
+                    <div id="detail-permissions">
+                        <!-- Populated via JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Activity View -->
+            <div id="view-activity" class="view hidden">
+                <header>
+                    <h2>Activity Log</h2>
+                </header>
+                <table class="activity-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Device</th>
+                            <th>Command</th>
+                            <th>Status</th>
+                            <th>Message</th>
+                        </tr>
+                    </thead>
+                    <tbody id="activity-log">
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Approvals View -->
+            <div id="view-approvals" class="view hidden">
+                <header>
+                    <h2>Pending Approvals</h2>
+                </header>
+                <div id="approvals-list" class="approvals-list">
+                    <!-- Populated via JS -->
+                </div>
+            </div>
+
+            <!-- Permissions View -->
+            <div id="view-permissions" class="view hidden">
+                <header>
+                    <h2>Global Permissions Overview</h2>
+                </header>
+                <p>Select a device from the Devices tab to edit its specific permissions.</p>
+            </div>
+
+            <!-- Memory View -->
+            <div id="view-memory" class="view hidden">
+                <header>
+                    <h2>Memory</h2>
+                </header>
+                <div id="memory-list" class="memory-grid">
+                    <!-- Populated via JS -->
+                </div>
+            </div>
+
+            <!-- Tasks View -->
+            <div id="view-tasks" class="view hidden">
+                <header>
+                    <h2>Tasks</h2>
+                </header>
+                <div id="tasks-list" class="tasks-grid">
+                    <!-- Populated via JS -->
+                </div>
+            </div>
+
+            <!-- Integrations View -->
+            <div id="view-integrations" class="view hidden">
+                <header>
+                    <h2>Integrations</h2>
+                </header>
+                <div class="integration-actions" style="margin-bottom: 20px;">
+                    <button id="btn-connect-gmail" class="btn-primary">Connect Gmail</button>
+                    <button id="btn-connect-calendar" class="btn-primary">Connect Calendar</button>
+                </div>
+                <div id="integrations-list" class="integrations-grid">
+                    <!-- Populated via JS -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Notifications Container -->
+    <div id="notifications-container"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

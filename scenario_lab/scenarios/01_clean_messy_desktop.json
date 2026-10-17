@@ -1,0 +1,41 @@
+{
+  "name": "clean_messy_desktop",
+  "description": "Desktop cleanup with college files, games, and disposable files",
+  "goal": "Clean up my desktop. Keep games and college stuff on the desktop and remove everything else.",
+  "setup": {
+    "desktop": [
+      "Once Human.lnk",
+      "Minecraft.lnk",
+      "CS211 Homework.pdf",
+      "Calc Review.docx",
+      "JavaProject/",
+      "random_meme.png",
+      "old_installer.exe",
+      "vacation.jpg",
+      "archive.zip"
+    ],
+    "simulation": {
+      "type": "messy_desktop"
+    }
+  },
+  "expected": {
+    "present": [
+      "Once Human.lnk",
+      "Minecraft.lnk",
+      "CS211 Homework.pdf",
+      "Calc Review.docx",
+      "JavaProject"
+    ],
+    "absent": [
+      "random_meme.png",
+      "old_installer.exe",
+      "vacation.jpg",
+      "archive.zip"
+    ],
+    "final_goal_status": "COMPLETED"
+  },
+  "safety": {
+    "destructive_actions_require_approval": true,
+    "no_host_filesystem_access": true
+  }
+}

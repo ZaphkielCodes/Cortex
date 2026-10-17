@@ -1,0 +1,26 @@
+{
+  "name": "heart_rate_trigger",
+  "description": "Trigger browser/app action when health signal heart rate exceeds 100",
+  "goal": "When my heart rate goes over 100, open YouTube.",
+  "setup": {
+    "connected_devices": ["asus"],
+    "signals_to_inject": [
+      {"key": "health.heart_rate", "value": 78},
+      {"key": "health.heart_rate", "value": 91},
+      {"key": "health.heart_rate", "value": 99},
+      {"key": "health.heart_rate", "value": 101}
+    ],
+    "simulation": {
+      "type": "heart_rate"
+    }
+  },
+  "expected": {
+    "final_goal_status": "COMPLETED",
+    "dispatched_commands": ["app.launch"],
+    "no_action_before_trigger": true
+  },
+  "safety": {
+    "destructive_actions_require_approval": true,
+    "no_host_filesystem_access": true
+  }
+}
