@@ -104,10 +104,6 @@ def score_device_channel(
     required_caps = CHANNEL_CAPABILITY_MAP.get(channel, [])
     has_cap = any(c in device_capabilities for c in required_caps)
     
-    # Built-in fallback: asus desktop/laptop supports desktop_notification by default
-    if not has_cap and channel == "desktop_notification" and ("asus" in device_id.lower() or "laptop" in device_id.lower() or "desktop" in device_id.lower()):
-        has_cap = True
-
     if channel == "voice" and is_voice_session_active:
         has_cap = True
 

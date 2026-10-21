@@ -32,6 +32,8 @@ def corresponding_element(before: UIObservation, after: UIObservation, element: 
         return None
     if before.foreground_app != after.foreground_app:
         return None
+    if before.pid and before.pid != after.pid:
+        return None
     runtime_id = element.metadata.get('runtime_id')
     automation_id = element.metadata.get('automation_id')
     if runtime_id:

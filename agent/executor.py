@@ -992,13 +992,32 @@ def execute(command: str, args: Union[dict, list, str, None] = None, latency_met
         log.info(f"Speech-end -> app launch: {total_latency:.3f}s")
         log.info(f"----------------------")
         
+    # Preserve native structured metadata across both local and WebSocket execution.
+    # The wire result carries data, so top-level paths and verification flags must not vanish.
+    if isinstance(result, dict):
+        metadata = {key:value for key,value in result.items() if key not in {
+            "status","message","error","data","latency_metrics","image_base64","screenshot_base64",
+            "secret","token","credentials","authorization"}}
+        if result.get("data") is None:
+            result = dict(result,data=metadata or None)
+        elif isinstance(result.get("data"),dict):
+            merged=dict(metadata,**result["data"])
+            # Negative verification cannot be overwritten by an inconsistent nested flag.
+            if result.get("verified") is False:
+                merged["verified"]=False
+            if result.get("verification_required") is True:
+                merged["verification_required"]=True
+            result = dict(result,data=merged)
     return result
+
 
 def get_capabilities() -> list[str]:
     """
     Dynamically determine which capabilities this agent supports at runtime.
     """
     caps = [
+        "transfer.inspect",
+        "transfer.send",
         "app.list_running",
         "process.list",
         "app.launch",
@@ -1058,6 +1077,8 @@ def get_capabilities() -> list[str]:
     # Voice capabilities
     caps.extend(["voice.mute", "voice.unmute", "voice.push_to_talk"])
 
+    if os.environ.get("CORTEX_RECEIVE_ROOT"):
+        caps.extend(["transfer.prepare", "transfer.cancel"])
     suppressed = [c.strip() for c in os.environ.get("CORTEX_SUPPRESS_CAPS", "").split(",") if c.strip()]
     if suppressed:
         caps = [c for c in caps if c not in suppressed]

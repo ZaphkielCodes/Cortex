@@ -37,7 +37,8 @@ PRODUCT_VERSION = "0.1.0"
 BUILD_IDENTIFIER = "cortex-hybrid-2026.10"
 ARCHITECTURE_MODE = "hybrid"
 DEFAULT_ROLE = "primary_admin"
-DEFAULT_NODE = "asus"
+from .config import get_hub_device_id
+DEFAULT_NODE = get_hub_device_id()
 
 
 @dataclass
@@ -153,7 +154,8 @@ class SystemRegistry:
         llm = get_llm_provider()
         llm_prov = getattr(llm, "name", None)
         llm_mod = getattr(llm, "model", None)
-        llm_avail = bool(llm and llm_prov and llm_mod and llm_prov != "unknown")
+        llm_avail = bool(llm and llm_prov and llm_mod and llm_prov not in {"unknown", "unavailable", "mock"}
+                         and llm_mod != "not-configured")
 
         models.append({
             "purpose": "conversational_reasoning",
@@ -221,6 +223,9 @@ class SystemRegistry:
                 "availability": cap.availability,
                 "provider": cap.provider_status.get("provider"),
                 "classification": cap.classification,
+                "provider_status": cap.provider_status,
+                "privacy_metadata": cap.privacy_metadata,
+                "side_effect_class": cap.side_effect_class,
             })
         return res
 
@@ -424,80 +429,12 @@ class SystemRegistry:
         Distinguishes API support from granted user authorization.
         Never claims integration access unless active tokens exist.
         """
-        # Base known integrations
-        known_integrations = [
-            {
-                "key": "calendar",
-                "name": "Google Calendar",
-                "provider": "google",
-                "scopes": [
-                    "https://www.googleapis.com/auth/calendar.readonly",
-                    "https://www.googleapis.com/auth/calendar.events",
-                ],
-            },
-            {
-                "key": "gmail",
-                "name": "Gmail",
-                "provider": "google",
-                "scopes": [
-                    "https://www.googleapis.com/auth/gmail.modify",
-                    "https://www.googleapis.com/auth/gmail.send",
-                ],
-            },
-        ]
-
-        # Query database integration records
-        db_records: Dict[str, dict] = {}
-        try:
-            records = await db_get_integrations()
-            for r in records:
-                p_name = r.get("plugin_name", "")
-                if p_name:
-                    db_records[p_name] = r
-        except Exception as e:
-            log.warning(f"Could not load integrations from DB: {e}")
-
-        result: List[Dict[str, Any]] = []
-        for item in known_integrations:
-            key = item["key"]
-            if key in self._integration_overrides:
-                override = self._integration_overrides[key]
-                result.append({
-                    "name": item["name"],
-                    "key": key,
-                    "provider": item["provider"],
-                    "connected": override.get("connected", False),
-                    "scopes": override.get("scopes", item["scopes"]),
-                    "status": override.get("status", "connected" if override.get("connected") else "not_connected"),
-                    "last_verified": override.get("last_verified"),
-                })
-                continue
-
-            # Check CredentialStore for tokens
-            has_tokens = False
-            try:
-                tokens = CredentialStore.get_tokens(f"{key}_primary")
-                if tokens and (tokens.get("access_token") or tokens.get("refresh_token")):
-                    has_tokens = True
-            except Exception:
-                has_tokens = False
-
-            db_rec = db_records.get(key)
-            db_active = (db_rec and db_rec.get("status") == "active")
-
-            is_connected = bool(has_tokens or db_active)
-            status_str = "connected" if is_connected else "not_connected"
-
-            result.append({
-                "name": item["name"],
-                "key": key,
-                "provider": item["provider"],
-                "connected": is_connected,
-                "scopes": item["scopes"] if is_connected else [],
-                "status": status_str,
-                "last_verified": db_rec.get("created_at") if db_rec else None,
-            })
-
+        from .integrations.ecosystem import IntegrationRegistry
+        result = await IntegrationRegistry.get_instance().statuses()
+        for item in result:
+            override = self._integration_overrides.get(item['key'])
+            if override:
+                item.update({key:override[key] for key in ('connected','scopes','status','last_verified') if key in override})
         return result
 
     async def get_integration_status(self, key: str) -> Dict[str, Any]:
@@ -597,110 +534,14 @@ class SystemRegistry:
     # 7. Limitation / Failure Explanation
     # -----------------------------------------------------------------------
     async def explain_capability(self, query_or_cap: str) -> Dict[str, Any]:
-        """
-        Explain deterministically why a requested capability or request cannot run.
-        Distinguishes:
-        - unsupported
-        - provider_unavailable
-        - missing_integration
-        - device_offline
-        - permission_denied
-        - approval_required
-        - ambiguous_target
-        - runtime_failure
-        """
-        q = query_or_cap.lower().strip()
-
-        # Check for Gmail / Calendar integration queries
-        if "gmail" in q or "email" in q or "inbox" in q:
-            integ = await self.get_integration_status("gmail")
-            if not integ.get("connected"):
-                return {
-                    "category": "missing_integration",
-                    "capability": "gmail.read",
-                    "explanation": "Gmail access is not currently connected or authorized.",
-                    "can_run": False,
-                }
-
-        if "calendar" in q:
-            integ = await self.get_integration_status("calendar")
-            if not integ.get("connected"):
-                return {
-                    "category": "missing_integration",
-                    "capability": "calendar.read",
-                    "explanation": "Google Calendar access is not currently connected or authorized.",
-                    "can_run": False,
-                }
-
-        # Check weather
-        if "weather" in q:
-            stat = self.get_capability_status("weather.current")
-            is_avail = stat["capabilities"]["weather.current"]["available"]
-            if not is_avail:
-                return {
-                    "category": "provider_unavailable",
-                    "capability": "weather.current",
-                    "explanation": "Weather capability is currently unavailable because the weather provider is disabled.",
-                    "can_run": False,
-                }
-
-        # Check web search
-        if "web" in q or "search" in q or "google" in q:
-            stat = self.get_capability_status("web.search")
-            is_avail = stat["capabilities"]["web.search"]["available"]
-            if not is_avail:
-                return {
-                    "category": "provider_unavailable",
-                    "capability": "web.search",
-                    "explanation": "Web search is currently unavailable because the search provider is unconfigured.",
-                    "can_run": False,
-                }
-
-        # Check screen perception
-        if "screen" in q or "look at" in q or "see my screen" in q:
-            stat = self.get_capability_status("screen.analyze")
-            is_avail = stat["capabilities"]["screen.analyze"]["available"]
-            if not is_avail:
-                return {
-                    "category": "provider_unavailable",
-                    "capability": "screen.analyze",
-                    "explanation": "Screen perception is currently unavailable because the vision provider is unconfigured or disabled.",
-                    "can_run": False,
-                }
-
-        # Check 3D printing / physical world fabrication
-        if any(w in q for w in ("3d print", "print 3d", "fabricate", "hardware hinge", "coffee")):
-            return {
-                "category": "unsupported",
-                "capability": None,
-                "explanation": "Hardware fabrication and physical-world manipulation are not supported by Cortex capabilities.",
-                "can_run": False,
-            }
-
-        # Check direct capability lookup
-        core_caps = get_core_capabilities()
-        if query_or_cap in core_caps:
-            cap = core_caps[query_or_cap]
-            if not cap.availability:
-                return {
-                    "category": "provider_unavailable",
-                    "capability": query_or_cap,
-                    "explanation": f"Provider for '{query_or_cap}' is currently unavailable or disabled.",
-                    "can_run": False,
-                }
-            return {
-                "category": "supported_and_available",
-                "capability": query_or_cap,
-                "explanation": f"Capability '{query_or_cap}' is registered and active.",
-                "can_run": True,
-            }
-
-        return {
-            "category": "unsupported",
-            "capability": None,
-            "explanation": f"No registered Cortex capability matches request '{query_or_cap}'.",
-            "can_run": False,
-        }
+        """Explain an exact canonical capability, never interpret a user phrase."""
+        cap = get_core_capabilities().get(query_or_cap)
+        if cap is None:
+            return {"category":"unsupported", "capability":None, "can_run":False,
+                "explanation":"No exact registered capability was supplied."}
+        return {"category":"supported_and_available" if cap.availability else "provider_unavailable",
+            "capability":cap.name,"can_run":bool(cap.availability),
+            "explanation":"The capability is available." if cap.availability else "The capability provider is unavailable."}
 
     @classmethod
     async def answer_query(cls, query: str, context: Optional[Dict[str, Any]] = None) -> Optional[str]:

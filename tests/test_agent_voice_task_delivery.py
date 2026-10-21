@@ -112,7 +112,7 @@ async def test_actual_agent_session_queues_correlated_background_result():
 @pytest.mark.asyncio
 async def test_provider_failure_details_survive_runtime():
     primary = SimpleNamespace(name="primary", generate_result=AsyncMock(side_effect=TimeoutError("deadline exceeded")))
-    backup = SimpleNamespace(name="backup", generate_result=AsyncMock(side_effect=ProviderHTTPError("OpenRouter", 402)))
+    backup = SimpleNamespace(name="backup", generate_result=AsyncMock(side_effect=ProviderHTTPError("Backup", 402)))
     provider = CircuitBreakerProvider(primary, backup)
     # Match the production deadline category without an external model call.
     from hub.llm_provider import ModelDeadlineExceeded
@@ -177,7 +177,8 @@ async def test_actual_hub_endpoint_preserves_task_correlation(monkeypatch):
     ctrl.connected_devices["asus"] = socket
     monkeypatch.setattr(main, "_agent_harness", AgentHarness(ctrl, ScriptedModel(
         [call("telemetry.get_system_usage")], "CPU is at 34%.")), raising=False)
-    monkeypatch.setattr(AgentTurn, "ACK_SECONDS", .01)
+    from hub.request_lifecycle import RequestLifecycle
+    monkeypatch.setattr(RequestLifecycle, "ACK_SECONDS", .01)
     await asyncio.wait_for(main.agent_endpoint(socket, "asus"), 3)
     assert len(replies) == 2
     assert replies[0]["status"] == "in_progress"
@@ -190,7 +191,7 @@ async def test_actual_hub_endpoint_preserves_task_correlation(monkeypatch):
 @pytest.mark.asyncio
 async def test_circuit_keeps_usage_limit_reason_for_followup_requests():
     primary = SimpleNamespace(name="primary", generate_result=AsyncMock(side_effect=ProviderHTTPError("Gemini", 429)))
-    backup = SimpleNamespace(name="backup", generate_result=AsyncMock(side_effect=ProviderHTTPError("OpenRouter", 402)))
+    backup = SimpleNamespace(name="backup", generate_result=AsyncMock(side_effect=ProviderHTTPError("Backup", 402)))
     provider = CircuitBreakerProvider(primary, backup)
     for _ in range(2):
         with pytest.raises(ReasoningProviderUnavailable) as error:

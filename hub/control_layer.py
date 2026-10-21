@@ -1,3 +1,4 @@
+from .config import hub_desktop_allowed, get_hub_device_id
 import logging
 import uuid
 import time
@@ -41,7 +42,7 @@ class CortexControlLayer:
         self,
         required_capability: str,
         requested_device: Optional[str] = None,
-        source_device_id: str = "asus",
+        source_device_id: str = "",
         owning_device: Optional[str] = None,
         permission_tier: int = 1,
         classification: str = "read",
@@ -59,6 +60,11 @@ class CortexControlLayer:
 
     async def validate_target_and_capability(self, target_device: str, required_cap: str) -> dict:
         from .permissions import COMMAND_TIERS
+        from .integrations.ecosystem import IntegrationRegistry
+        integration = IntegrationRegistry.get_instance().get(required_cap)
+        if integration:
+            status=IntegrationRegistry.get_instance().capability_status(integration)
+            return {"valid":status["available"],"reason":"ok" if status["available"] else status.get("reason","integration_unavailable")}
         if required_cap.startswith("system.") or required_cap.startswith("hub.") or required_cap.startswith("task.") or required_cap.startswith("memory.") or required_cap.startswith("people.") or required_cap.startswith("speaker.") or required_cap.startswith("social.") or required_cap.startswith("context.") or required_cap.startswith("proactive.") or required_cap.startswith("attention.") or required_cap.startswith("calendar.") or required_cap.startswith("telemetry.") or required_cap.startswith("workload.") or required_cap.startswith("goal.") or required_cap.startswith("web.") or required_cap.startswith("weather."):
             if required_cap in COMMAND_TIERS:
                 return {"valid": True, "reason": "ok", "role": "admin"}
@@ -90,6 +96,11 @@ class CortexControlLayer:
         return {"valid": True, "reason": "ok", "role": role}
 
     async def check_permissions(self, source_device_id: str, target_device: str, required_cap: str) -> Any:
+        from .integrations.ecosystem import IntegrationRegistry
+        if IntegrationRegistry.get_instance().get(required_cap):
+            caller=await get_device(source_device_id)
+            if not caller:return None
+            return await check_permission(caller["role"],source_device_id,source_device_id,required_cap)
         if required_cap.startswith("hub.") or required_cap.startswith("task.") or required_cap.startswith("memory.") or required_cap.startswith("people.") or required_cap.startswith("speaker.") or required_cap.startswith("social.") or required_cap.startswith("context.") or required_cap.startswith("proactive.") or required_cap.startswith("attention.") or required_cap.startswith("calendar.") or required_cap.startswith("telemetry.") or required_cap.startswith("workload.") or required_cap.startswith("goal.") or required_cap.startswith("web.") or required_cap.startswith("weather."):
             from .permissions import get_command_tier, PermissionResult
             tier = get_command_tier(required_cap)
@@ -115,6 +126,8 @@ class CortexControlLayer:
             requested_by=source_device_id,
             tier=tier
         )
+        from .integrations.ecosystem import IntegrationRegistry
+        IntegrationRegistry.get_instance().bind_approval(cmd_id,action,args,source_device_id)
         return cmd_id
 
     async def execute_command(self, target_device: str, action: str, args: dict, latency_metrics: dict = None, cmd_id: str = None, is_autonomous: bool = False) -> str:
@@ -178,7 +191,7 @@ class CortexControlLayer:
         target_device: str,
         action: Optional[Any] = None,
         args: Optional[dict] = None,
-        timeout: float = 15.0,
+        timeout: float = 45.0,
         cmd_id: Optional[str] = None,
         is_autonomous: bool = False,
         **kwargs,
@@ -190,7 +203,7 @@ class CortexControlLayer:
         if action is None or isinstance(action, dict):
             actual_args = action if isinstance(action, dict) else (args or {})
             actual_action = target_device
-            target_device = kwargs.get("device_id") or "asus"
+            target_device = kwargs.get("device_id") or get_hub_device_id()
             action = actual_action
             args = actual_args
         if args is None:
@@ -323,7 +336,8 @@ class CortexControlLayer:
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                urllib.request.urlopen(req, timeout=2.0)
+                import asyncio
+                await asyncio.to_thread(urllib.request.urlopen, req, timeout=2.0)
                 return {
                     "status": "success",
                     "message": "Runtime transition to DORMANT initiated",
@@ -335,6 +349,12 @@ class CortexControlLayer:
                     "message": f"Could not contact supervisor: {exc}",
                     "data": {},
                 }
+        elif action == "system.runtime_state":
+            from .runtime_introspection import runtime_snapshot
+            source_device = kwargs.get("source_device_id")
+            if not source_device:
+                return {"status": "denied", "message": "An authenticated requesting device is required."}
+            return await runtime_snapshot(source_device)
         elif action == "system.identity":
             from .system_registry import SystemRegistry
             ident = SystemRegistry.get_instance().get_identity(current_node=target_device)
@@ -360,7 +380,7 @@ class CortexControlLayer:
         elif action == "system.device_status":
             from .system_registry import SystemRegistry
             args_dict = args if isinstance(args, dict) else {}
-            d_id = args_dict.get("device_id") or (args[0] if isinstance(args, list) and args else (target_device or "asus"))
+            d_id = args_dict.get("device_id") or (args[0] if isinstance(args, list) and args else (target_device))
             stat = await SystemRegistry.get_instance().get_device_status(d_id, current_node=target_device, connected_devices_map=self.connected_devices)
             return {"status": "success" if stat else "failure", "message": f"Device {d_id} status retrieved." if stat else f"Device {d_id} not found.", "data": stat}
         elif action == "system.list_integrations":
@@ -461,13 +481,16 @@ class CortexControlLayer:
                 return {"status": "failure", "message": f"Weather forecast failed: {exc}", "error": str(exc)}
         elif action in ("telemetry.get_system_usage", "telemetry_get_system_usage"):
             from .world_state import DeviceSignalAdapter
-            target_d = (args if isinstance(args, dict) else {}).get("target_device") or target_device or "asus"
+            target_d = (args if isinstance(args, dict) else {}).get("target_device") or target_device
             telem = DeviceSignalAdapter.inspect_system_telemetry(target_d)
+            if telem.get("cpu_percent") is None:
+                return {"status": "failure", "message": "CPU sampling was unavailable; no CPU percentage was measured.",
+                        "data": telem, "error_code": "telemetry_sampling_unavailable"}
             msg = f"CPU: {telem['cpu_percent']}%, RAM: {telem['ram_used_gb']}/{telem['ram_total_gb']} GB ({telem['ram_percent']}%), Disk: {telem['disk_free_gb']} GB free out of {telem['disk_total_gb']} GB ({telem['disk_percent']}% used)."
             return {"status": "success", "message": msg, "data": telem}
         elif action in ("telemetry.get_hardware_info", "telemetry_get_hardware_info"):
             from .world_state import DeviceSignalAdapter
-            target_d = (args if isinstance(args, dict) else {}).get("target_device") or target_device or "asus"
+            target_d = (args if isinstance(args, dict) else {}).get("target_device") or target_device
             telem = DeviceSignalAdapter.inspect_system_telemetry(target_d)
             msg = f"Hardware info: {telem['manufacturer']} {telem['model']}, CPU: {telem['processor']}, GPU: {telem['gpu']}, Hostname: {telem['hostname']}, OS: {telem['os']}."
             return {"status": "success", "message": msg, "data": telem}
@@ -482,7 +505,7 @@ class CortexControlLayer:
             url = args_dict.get("url", "")
             if target_device and target_device in self.connected_devices:
                 pass  # Dispatches via websocket below
-            elif target_device and target_device not in ("asus", "local", "this_device", "test_dev"):
+            elif not hub_desktop_allowed(target_device):
                 return {
                     "status": "failure",
                     "message": f"Target device '{target_device}' is not connected.",
@@ -490,7 +513,8 @@ class CortexControlLayer:
                 }
             else:
                 from agent.executor import handle_browser_open_url
-                res = handle_browser_open_url([url])
+                import asyncio
+                res = await asyncio.to_thread(handle_browser_open_url, [url])
                 return {
                     "status": res.get("status", "success"),
                     "message": res.get("message", ""),
@@ -499,7 +523,7 @@ class CortexControlLayer:
         elif action in ("screen.capture", "take_screenshot", "screenshot.read", "intent_screenshot"):
             if target_device and target_device in self.connected_devices:
                 pass  # Dispatches via websocket below
-            elif target_device and target_device not in ("asus", "local", "this_device", "test_dev"):
+            elif not hub_desktop_allowed(target_device):
                 return {
                     "status": "failure",
                     "message": f"Target device '{target_device}' is not connected.",
@@ -507,7 +531,8 @@ class CortexControlLayer:
                 }
             else:
                 from agent.executor import handle_screen_capture
-                res = handle_screen_capture(args)
+                import asyncio
+                res = await asyncio.to_thread(handle_screen_capture, args)
                 return {
                     "status": res.get("status", "success"),
                     "message": res.get("message", ""),
@@ -535,7 +560,7 @@ class CortexControlLayer:
         ):
             if target_device and target_device in self.connected_devices:
                 pass  # Dispatches via websocket below
-            elif target_device and target_device not in ("asus", "local", "this_device", "test_dev"):
+            elif not hub_desktop_allowed(target_device):
                 return {
                     "status": "failure",
                     "message": f"Target device '{target_device}' is not connected.",
@@ -543,7 +568,8 @@ class CortexControlLayer:
                 }
             else:
                 from agent.executor import execute
-                res = execute(action, args)
+                import asyncio
+                res = await asyncio.to_thread(execute, action, args)
                 return dict(res, data=res.get("data") or res)
 
         elif action == "screen.analyze":
@@ -612,7 +638,7 @@ class CortexControlLayer:
             if img_ref:
                 try:
                     from .session_context import SessionContextManager
-                    await SessionContextManager.set_screenshot_ref(target_device or "asus", img_ref)
+                    await SessionContextManager.set_screenshot_ref(target_device, img_ref)
                 except Exception:
                     pass
 

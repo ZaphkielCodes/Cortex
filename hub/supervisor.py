@@ -18,6 +18,7 @@ import asyncio
 from enum import Enum
 import http.server
 import json
+from .config import get_hub_device_id
 import logging
 import os
 from pathlib import Path
@@ -35,7 +36,7 @@ import urllib.error
 ROOT_DIR = Path(__file__).resolve().parents[1]
 LOGS_DIR = ROOT_DIR / "logs"
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
-CORTEX_STATE_DIR = Path.home() / ".cortex"
+CORTEX_STATE_DIR = Path(os.environ.get("CORTEX_STATE_DIR", str(Path.home() / ".cortex")))
 CORTEX_STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Logger setup
@@ -164,7 +165,7 @@ class Supervisor:
     ):
         self.hub_host = os.environ.get("CORTEX_HUB_HOST", hub_host)
         self.hub_port = int(os.environ.get("CORTEX_HUB_PORT", str(hub_port)))
-        self.device_id = device_id or os.environ.get("CORTEX_DEVICE_ID", "asus")
+        self.device_id = device_id or os.environ.get("CORTEX_DEVICE_ID") or get_hub_device_id()
         self.ipc_port = int(os.environ.get("CORTEX_SUPERVISOR_PORT", str(ipc_port)))
         self.use_mock_voice = use_mock_voice
         self.idle_timeout_seconds = idle_timeout_minutes * 60.0

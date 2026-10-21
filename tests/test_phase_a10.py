@@ -372,6 +372,8 @@ def test_pointer_actions():
     # Mock user32 pointer methods so no physical cursor jump during test
     with patch.object(executor, "_move_cursor") as mock_move, \
          patch.object(executor, "_send_mouse_event") as mock_mouse, \
+         patch.object(observer, "element_is_current", return_value=True), \
+         patch("agent.ui_action_executor.ctypes.windll.user32.GetForegroundWindow",return_value=obs.window_id), \
          patch.object(observer, "is_observation_fresh", return_value=(True, "Fresh")):
 
         # 8a. Left click
@@ -388,7 +390,7 @@ def test_pointer_actions():
         assert res_rclk["action"] == "ui.right_click"
 
         # 8c. Move pointer
-        res_mov = executor.move_pointer({"x": 300, "y": 400})
+        res_mov = executor.move_pointer({"x": 300, "y": 400, "observation_id":"obs_ptr"})
         assert res_mov["status"] == "success"
         assert res_mov["coordinates"] == [300, 400]
 
@@ -461,8 +463,11 @@ def test_text_entry_and_credential_masking():
 # ---------------------------------------------------------------------------
 def test_scrolling():
     executor = UIActionExecutor.get_instance()
-    with patch.object(executor, "_send_mouse_event") as mock_mouse:
-        res = executor.scroll({"direction": "down", "amount": 240})
+    observer = UIObserver.get_instance()
+    observer._store_observation(make_sample_observation("obs_scroll"))
+    with patch.object(executor, "_send_mouse_event") as mock_mouse, \
+         patch.object(observer, "is_observation_fresh", return_value=(True, "Fresh")):
+        res = executor.scroll({"direction": "down", "amount": 240, "observation_id": "obs_scroll"})
         assert res["status"] == "success"
         assert res["data"]["direction"] == "down"
         assert res["data"]["amount"] == 240
@@ -474,9 +479,16 @@ def test_scrolling():
 # ---------------------------------------------------------------------------
 def test_drag_and_drop():
     executor = UIActionExecutor.get_instance()
+    observer=UIObserver.get_instance()
+    obs=make_sample_observation("obs_drag")
+    obs.elements=[UIElement("el_source","button","Source",bounds=[90,90,20,20]),
+                  UIElement("el_destination","button","Destination",bounds=[390,390,20,20])]
+    observer._store_observation(obs)
     with patch.object(executor, "_move_cursor") as mock_move, \
-         patch.object(executor, "_send_mouse_event") as mock_mouse:
-        res = executor.drag({"from_x": 100, "from_y": 100, "to_x": 400, "to_y": 400})
+         patch.object(executor, "_send_mouse_event") as mock_mouse, \
+         patch.object(observer, "element_is_current", return_value=True), \
+         patch.object(observer, "is_observation_fresh", return_value=(True,"Fresh")):
+        res = executor.drag({"from_x": 100, "from_y": 100, "to_x": 400, "to_y": 400,"observation_id":"obs_drag"})
         assert res["status"] == "success"
         assert res["coordinates"] == [400, 400]
         assert mock_move.call_count >= 10
@@ -520,7 +532,7 @@ def test_post_action_verification():
 @pytest.mark.asyncio
 async def test_failed_verification_triggers_replan():
     controller = ComputerUseTaskController.get_instance()
-    task = controller.create_task("Open billing section")
+    task = controller.create_task("Open billing section", executor_device="asus")
     step = ComputerUseStep(step_id="step_1", action="ui.click", target="Billing")
     task.steps.append(step)
 
@@ -539,25 +551,13 @@ async def test_failed_verification_triggers_replan():
 # 15. Context Continuity & Deictic Pronoun Resolution
 # ---------------------------------------------------------------------------
 def test_context_continuity_references():
-    controller = ComputerUseTaskController.get_instance()
-    obs = make_sample_observation("obs_ctx")
-
-    task = controller.create_task("Review settings")
-    task.last_grounded_element = {"element_id": "el_6", "label": "Dark mode"}
-
-    # 'click that' -> resolves to last grounded element
-    target, note = controller.resolve_contextual_target("click that", task, None, obs)
-    assert target == "el_6"
-    assert "Dark mode" in note
-
-    # 'go back' -> resolves to alt+left hotkey
-    act, param = controller.resolve_contextual_target("go back", task, None, obs)
-    assert act == "ui.hotkey"
-    assert param == "alt+left"
-
-    # 'the second one' -> preserves ordinal query for grounder
-    ord_tgt, _ = controller.resolve_contextual_target("the second one", task, None, obs)
-    assert ord_tgt == "the second one"
+    controller=ComputerUseTaskController.get_instance()
+    obs=make_sample_observation("obs_ctx")
+    task=controller.create_task("Review settings",executor_device="asus")
+    task.last_grounded_element={"element_id":"el_6","label":"Dark mode"}
+    for target in ["click that","go back","the second one"]:
+        assert controller.resolve_contextual_target(target,task,None,obs)==(target,None)
+    # No raw phrase may select a stale element ID or infer a hotkey.
 
 
 # ---------------------------------------------------------------------------
@@ -601,7 +601,7 @@ async def test_policy_gating_high_impact_actions():
 @pytest.mark.asyncio
 async def test_approval_integration_and_resolution():
     controller = ComputerUseTaskController.get_instance()
-    task = controller.create_task("Perform account purchase")
+    task = controller.create_task("Perform account purchase", executor_device="asus")
     step = ComputerUseStep(
         step_id="step_purchase",
         action="ui.click",
@@ -662,27 +662,12 @@ def test_task_checkpointing_and_resume():
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_capability_preference_over_gui_automation():
-    from hub.planner import GoalPlanner
-    from hub.goals import Goal, GoalManager
-
-    planner = GoalPlanner.get_instance()
-    gm = GoalManager.get_instance()
-
-    # "Open Chrome" should choose app.launch, NOT ui.click(Start) -> type Chrome
-    plan_app = planner._reason_from_capabilities(
-        request="Open Chrome",
-        capabilities=["app.launch", "ui.click", "ui.observe"],
-        target_device="asus",
-    )
-    assert plan_app["steps"][0]["capability"] == "app.launch"
-
-    # "Open Downloads" should choose fs.open or fs.list, NOT GUI automation
-    plan_file = planner._reason_from_capabilities(
-        request="Open my Calc review PDF and switch to it",
-        capabilities=["fs.open", "window.list", "window.focus", "ui.click"],
-        target_device="asus",
-    )
-    assert plan_file["steps"][0]["capability"] == "fs.open"
+    from model_contract_fixtures import scripted_harness,call
+    for capability,args in [("app.launch",{"app":"Chrome"}),("fs.open",{"path":"C:/fixture/review.pdf"})]:
+        harness,ctrl,model=scripted_harness([call(capability,**args)],[{"status":"success","data":{"verified":True}}])
+        result=await harness.process_request("asus","Open the requested resource",{})
+        assert result.status == "success"
+        assert ctrl.execute_and_observe.call_args.args[1] == capability
 
 
 # ---------------------------------------------------------------------------
@@ -729,45 +714,15 @@ def test_clipboard_safe_operations():
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_general_goal_escalation_to_computer_use():
-    from hub.pipeline.normalizer import InputNormalizer
-    from hub.planner import GoalPlanner
-
-    si = SemanticInterpreter()
-    gp = GoalPlanner.get_instance()
-    ctx = AssembledContext(source_device="asus")
-    caps = [
-        {"name": "app.launch", "availability": True},
-        {"name": "ui.observe", "availability": True},
-        {"name": "ui.click", "availability": True},
-        {"name": "ui.type", "availability": True},
-        {"name": "ui.scroll", "availability": True},
-        {"name": "ui.hotkey", "availability": True},
-    ]
-
-    general_goals = [
-        "change my display to 60 hertz",
-        "turn on dark mode",
-        "make the text larger",
-        "switch the default browser",
-        "open Settings and show me my battery usage",
-        "find the Bluetooth page",
-    ]
-
-    for goal_text in general_goals:
-        norm = InputNormalizer.normalize(goal_text)
-        intent = await si.interpret(norm, ctx)
-        assert intent.type == "GOAL", f"Expected GOAL intent for '{goal_text}', got {intent.type}"
-        assert intent.required_effect == "desktop_state_change", f"Expected desktop_state_change for '{goal_text}'"
-        assert intent.arguments.get("execution_mode") == "computer_use"
-        assert intent.arguments.get("target_device") == "asus"
-        assert "success_condition" in intent.arguments
-
-        plan = gp._reason_from_capabilities(request=goal_text, capabilities=caps, target_device="asus")
-        steps = [s["capability"] for s in plan.get("steps", [])]
-        assert len(steps) >= 3, f"Expected multi-step plan for '{goal_text}', got {steps}"
-        assert "app.launch" in steps
-        assert "ui.observe" in steps
-        assert "ui.click" in steps
+    from model_contract_fixtures import scripted_harness,call
+    requests=["change my display to 60 hertz","turn on dark mode","make the text larger","switch the default browser","open Settings and show me my battery usage","find the Bluetooth page"]
+    for request in requests:
+        harness,ctrl,model=scripted_harness([call("ui.observe",include_tree=False),{"decision":"ASK_CLARIFICATION","response_text":"Which control should I change?"}],[{"status":"success","data":{"foreground_app":"Settings"}}])
+        model.decisions[0]["continue_after_result"]=True
+        result=await harness.process_request("asus",request,{})
+        assert result.status == "clarification_needed"
+        assert ctrl.execute_and_observe.call_args.args[1] == "ui.observe"
+        assert model.calls[0][0] == request
 
 
 # ---------------------------------------------------------------------------
@@ -806,46 +761,14 @@ async def test_truthful_limitation_for_non_desktop_goals():
 # -------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_compound_goal_decomposition_and_notepad():
-    from hub.pipeline.normalizer import InputNormalizer
-    from hub.planner import GoalPlanner
-
-    si = SemanticInterpreter()
-    gp = GoalPlanner.get_instance()
-    ctx = AssembledContext(source_device="asus")
-    caps = [
-        {"name": "app.launch", "availability": True},
-        {"name": "ui.observe", "availability": True},
-        {"name": "ui.click", "availability": True},
-        {"name": "ui.type", "availability": True},
-    ]
-
-    goal_text = "open Notepad and type Cortex physical test."
-    norm = InputNormalizer.normalize(goal_text)
-    intent = await si.interpret(norm, ctx)
-    assert intent.type == "GOAL"
-    assert intent.required_effect == "compound_app_computer_use"
-    assert intent.arguments.get("app") == "Notepad"
-    assert "type" in intent.arguments.get("subgoal", "").lower()
-
-    # Verify plan launches Notepad, NOT Settings!
-    plan = gp._reason_from_capabilities(
-        request=goal_text,
-        capabilities=caps,
-        target_device="asus",
-        intent_args=intent.arguments,
-    )
-    steps = plan.get("steps", [])
-    assert len(steps) >= 3
-    launch_step = steps[0]
-    assert launch_step["capability"] == "app.launch"
-    assert launch_step["arguments"]["app"] == "Notepad"
-    assert launch_step["arguments"]["app"] != "Settings"
-
-    # Verify that the full user request is NEVER passed as a UI target selector
-    for step in steps:
-        if step["capability"] == "ui.click":
-            assert step["arguments"].get("target") != goal_text
-            assert step["arguments"].get("target") == "Text Editor"
+    from model_contract_fixtures import scripted_harness,call
+    initial=call("app.launch",app="Notepad");initial["continue_after_result"]=True
+    initial["success_condition"]=[{"source":"ui","selector":{"role":"input"},"path":["text"],"operator":"equals","value":"Cortex physical test."}]
+    harness,ctrl,model=scripted_harness([initial,{"decision":"ASK_CLARIFICATION","response_text":"I need an observed editable field before typing."}],[{"status":"success","data":{"opened":True}}])
+    result=await harness.process_request("asus","open Notepad and type Cortex physical test.",{})
+    assert result.status == "clarification_needed"
+    assert ctrl.execute_and_observe.call_args.args[2]["app"] == "Notepad"
+    assert ctrl.execute_and_observe.await_count == 1  # No guessed Text Editor selector.
 
 
 # ---------------------------------------------------------------------------
@@ -853,32 +776,12 @@ async def test_compound_goal_decomposition_and_notepad():
 # -------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_contextual_computer_use_and_corrections():
-    from hub.pipeline.normalizer import InputNormalizer
-
-    si = SemanticInterpreter()
-    ctx = AssembledContext(source_device="asus")
-
-    # 1. Contextual Return
-    intent_back = await si.interpret(InputNormalizer.normalize("Take me back to the app I was using before."), ctx)
-    assert intent_back.required_effect == "switch_previous_app"
-
-    # 2. Grounded Perception
-    intent_perceive = await si.interpret(InputNormalizer.normalize("Can you see what I'm doing right now?"), ctx)
-    assert intent_perceive.required_effect == "grounded_screen_perception"
-
-    # 3. Verification Query
-    intent_change = await si.interpret(InputNormalizer.normalize("Did you change it?"), ctx)
-    assert intent_change.required_effect == "check_last_task_status"
-
-    # 4. User Correction
-    intent_corr = await si.interpret(InputNormalizer.normalize("I said Notepad, not Settings"), ctx)
-    assert intent_corr.required_effect == "user_correction"
-    assert intent_corr.arguments.get("intended_app") == "Notepad"
-    assert intent_corr.arguments.get("rejected_app") == "Settings"
-
-    # 5. Deictic Refresh Rate
-    intent_deictic = await si.interpret(InputNormalizer.normalize("Change it back to 120 Hertz."), ctx)
-    assert intent_deictic.required_effect == "desktop_state_change"
-    assert intent_deictic.arguments.get("execution_mode") == "computer_use"
+    from model_contract_fixtures import scripted_harness,call
+    harness,ctrl,model=scripted_harness([call("app.launch",app="Notepad")],[{"status":"success","data":{"opened":True}}])
+    context={"history":[{"role":"user","text":"Open Settings"},{"role":"assistant","text":"Settings was selected."}]}
+    result=await harness.process_request("asus","I said Notepad, not Settings",context)
+    assert result.status == "success"
+    assert model.calls[0][1]["conversation_history"] == context["history"]
+    assert ctrl.execute_and_observe.call_args.args[2]["app"] == "Notepad"
 
 

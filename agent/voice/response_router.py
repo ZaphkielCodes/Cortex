@@ -19,6 +19,19 @@ def route_voice_response(data, active_state):
     completed = active_state.setdefault("completed_voice_tasks", {})
 
     def deliver(result, task_id):
+        if result.get("status") == "in_progress":
+            approval_id = (result.get("data") or {}).get("approval_id")
+            if not approval_id:
+                return []
+            seen = active_state.setdefault("voice_approval_prompts", {})
+            key = (task_id, approval_id)
+            if key in seen:
+                return []
+            seen[key] = True
+            while len(seen) > 256:
+                seen.pop(next(iter(seen)))
+            early.pop(task_id, None)
+            return [result.get("message") or "Cloud sharing requires your approval."]
         tasks.pop(task_id, None)
         early.pop(task_id, None)
         completed[task_id] = True
@@ -47,6 +60,12 @@ def route_voice_response(data, active_state):
         task_id = data.get("task_id") or (data.get("data") or {}).get("task_id")
         if task_id and data.get("status") == "in_progress":
             tasks[task_id] = cmd_id
+            approval_id = (data.get("data") or {}).get("approval_id")
+            if approval_id:
+                seen = active_state.setdefault("voice_approval_prompts", {})
+                seen[(task_id, approval_id)] = True
+                while len(seen) > 256:
+                    seen.pop(next(iter(seen)))
             while len(tasks) > 256:
                 tasks.pop(next(iter(tasks)))
         future.set_result(data)

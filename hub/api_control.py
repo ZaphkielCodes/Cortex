@@ -24,7 +24,7 @@ import logging
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
 from pydantic import BaseModel
 
 from .system_registry import SystemRegistry
@@ -52,7 +52,17 @@ from .pipeline.event_bus import (
 
 log = logging.getLogger("cortex.api_control")
 
-router = APIRouter(prefix="/api/control", tags=["control_center"])
+async def authenticate_control(request: Request):
+    from .main import _authenticate_http_headers
+    caller = await _authenticate_http_headers(request.headers.get("X-Cortex-Device"),
+        request.headers.get("X-Cortex-Secret"), request.cookies.get("cortex_session"))
+    if request.url.path != "/api/control/message" and caller.get("role") not in {"admin", "primary_admin"}:
+        raise HTTPException(status_code=403, detail="Administrator access is required for global controls.")
+    request.state.control_caller = caller
+    return caller
+
+
+router = APIRouter(prefix="/api/control", tags=["control_center"], dependencies=[Depends(authenticate_control)])
 
 # ---------------------------------------------------------------------------
 # Activity Stream (Frontend-Safe Structured Operational Events)
@@ -64,7 +74,7 @@ def emit_activity(
     label: str,
     category: str = "execution",
     status: str = "active",
-    device_id: Optional[str] = "asus",
+    device_id: Optional[str] = None,
     task_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -76,7 +86,7 @@ def emit_activity(
         "category": category,
         "label": label,
         "status": status,
-        "device_id": device_id or "asus",
+        "device_id": device_id,
         "task_id": task_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -158,7 +168,7 @@ async def build_canonical_state() -> Dict[str, Any]:
                 "title": g.title,
                 "status": g.status,
                 "owner": "cortex-hub",
-                "executor": g.metadata.get("executor_id", "asus"),
+                "executor": g.metadata.get("executor_id"),
                 "current_step": g.metadata.get("current_step", ""),
                 "waiting_reason": g.waiting_reason or "",
                 "progress": g.metadata.get("progress", 0.0),
@@ -177,15 +187,16 @@ async def build_canonical_state() -> Dict[str, Any]:
             tasks_data.append({
                 "id": ex.task_execution_id,
                 "title": f"Task Step ({ex.step_id or ex.task_execution_id[:8]})",
-                "status": ex.state,
+                "status": ex.execution_state,
+                "parent_task_id": ex.goal_id,
                 "owner": ex.owner_device_id,
-                "executor": ex.current_executor_id,
+                "executor": ex.executor_device_id,
                 "current_step": ex.step_id,
-                "waiting_reason": ex.handoff_state.get("reason", "") if isinstance(ex.handoff_state, dict) else "",
-                "progress": 1.0 if ex.state == "COMPLETED" else 0.5,
+                "waiting_reason": ex.metadata.get("waiting_reason", ""),
+                "progress": 1.0 if ex.execution_state == "COMPLETED" else 0.0 if ex.execution_state == "FAILED" else 0.5,
                 "created_at": ex.created_at,
                 "updated_at": ex.updated_at,
-                "handoff_state": ex.handoff_state.get("state", "none") if isinstance(ex.handoff_state, dict) else str(ex.handoff_state),
+                "handoff_state": ex.metadata.get("handoff_state", "none"),
                 "is_goal": False,
             })
 
@@ -199,7 +210,7 @@ async def build_canonical_state() -> Dict[str, Any]:
                     "title": dt.get("title", "Scheduled Task"),
                     "status": dt.get("status", "pending"),
                     "owner": "cortex-hub",
-                    "executor": dt.get("assigned_device", "asus"),
+                    "executor": dt.get("assigned_device"),
                     "current_step": dt.get("command", ""),
                     "waiting_reason": "",
                     "progress": 0.0,
@@ -215,16 +226,39 @@ async def build_canonical_state() -> Dict[str, Any]:
     # Agent turns must remain visible alongside goal/ownership tasks.
     existing_ids = {t["id"] for t in tasks_data}
     for dt in await get_tasks():
-        if dt.get("type") == "agent_turn" and dt["id"] not in existing_ids:
+        if dt.get("type") in {"agent_turn", "request"} and dt["id"] not in existing_ids:
+            try:
+                task_context = json.loads(dt.get("context") or "{}") if isinstance(dt.get("context"), str) else (dt.get("context") or {})
+                if not isinstance(task_context, dict):
+                    task_context = {}
+            except (TypeError, ValueError):
+                task_context = {}
             tasks_data.append({"id": dt["id"], "title": dt.get("title", "Agent task"),
                 "status": dt.get("status"), "owner": dt.get("assigned_device"),
-                "executor": dt.get("assigned_device"), "current_step": "agent_turn",
+                "executor": dt.get("assigned_device"), "current_step": dt.get("type"),
+                "parent_task_id": task_context.get("parent_request_id"),
                 "waiting_reason": dt.get("last_error", ""), "progress": 1.0 if dt.get("status") == "COMPLETED" else 0.0,
                 "created_at": dt.get("created_at", ""), "updated_at": dt.get("updated_at", ""),
                 "handoff_state": "none", "is_goal": False})
+    # Display safe operational state for both child and owning request identities.
+    for durable in await get_tasks():
+        saved = durable.get("context") or {}
+        try:
+            saved = json.loads(saved) if isinstance(saved,str) else saved
+        except (TypeError,ValueError):
+            continue
+        compound = saved.get("compound_ui") or {}
+        if not compound:
+            continue
+        for visible in tasks_data:
+            if visible["id"] in {durable["id"], saved.get("parent_request_id")}:
+                visible["compound"] = {key:compound.get(key) for key in
+                    ("current_stage","current_observation_id","retry_count","blocked_reason","trace_sequence")}
+                visible["current_step"] = compound.get("current_stage")
     pending_raw = await get_pending_confirmations()
     approvals_data = []
     for r in pending_raw:
+        from .approval_observability import snapshot as approval_snapshot
         args_parsed = []
         try:
             args_parsed = json.loads(r.get("args", "[]"))
@@ -234,16 +268,18 @@ async def build_canonical_state() -> Dict[str, Any]:
         approvals_data.append({
             "command_id": r.get("command_id"),
             "target_device": r.get("target_device"),
-            "source_device": r.get("requested_by", "asus"),
+            "source_device": r.get("requested_by"),
             "command": r.get("command"),
             "args": args_parsed,
-            "action_summary": f"Execute action '{r.get('command')}' on {r.get('target_device')}",
+            "action_summary": (args_parsed[0] if args_parsed else "Approve cloud sharing") if r.get("command") == "model.share" else f"Execute action '{r.get('command')}' on {r.get('target_device')}",
             "privacy_risk": "Requires administrator permission (Tier 3 confirmation)" if r.get("tier", 2) >= 3 else "Action confirmation required",
-            "data_leaves_local": r.get("target_device") != r.get("requested_by"),
+            "data_leaves_local": r.get("command") == "model.share" or r.get("target_device") != r.get("requested_by"),
             "tier": r.get("tier", 2),
             "status": r.get("status", "pending"),
             "requested_at": r.get("requested_at"),
-            "reason": f"Action involves cross-device command or elevated permissions",
+            "reason": "Share this result with the named cloud model for this request" if r.get("command") == "model.share" else "Action involves cross-device command or elevated permissions",
+            **approval_snapshot(r.get("command_id")),
+            "server_now": datetime.now(timezone.utc).isoformat(),
         })
 
     # 5. Transfers (A8 chunked transfer sessions)
@@ -326,6 +362,13 @@ async def build_canonical_state() -> Dict[str, Any]:
     model_status = {"provider": provider.name, "model": getattr(provider, "model", "unknown"),
                     "last_failure": getattr(provider, "last_primary_failure_category", None),
                     "circuit_open": bool(getattr(provider, "circuit_open_until", 0) > time.time())}
+    router = provider
+    while hasattr(router, "provider"):
+        router = router.provider
+    from .direct_router import DirectModelRouter
+    if isinstance(router, DirectModelRouter):
+        model_status["routes"] = router.status()
+        model_status["routing"] = router.last_routing
     return {
         "identity": identity,
         "devices": devices_data,
@@ -394,18 +437,24 @@ async def get_state_endpoint():
 
 class MessageRequest(BaseModel):
     text: str
-    device_id: Optional[str] = "asus"
+    device_id: Optional[str] = None
     speaker_id: Optional[str] = None
     is_voice: Optional[bool] = False
     target_device: Optional[str] = None
+    request_id: Optional[str] = None
 
 
 @router.post("/message")
-async def send_message_endpoint(req: MessageRequest):
+async def send_message_endpoint(req: MessageRequest, request: Request = None):
     """
     Process conversation input from the UI through AgentHarness pipeline.
     Emits operational activity events and returns structured response.
     """
+    if request is not None:
+        caller_id = request.state.control_caller["device_id"]
+        if req.device_id and req.device_id != caller_id:
+            raise HTTPException(status_code=403, detail="A request cannot impersonate another device.")
+        req = req.model_copy(update={"device_id": caller_id})
     text = req.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="Message text cannot be empty.")
@@ -423,29 +472,25 @@ async def send_message_endpoint(req: MessageRequest):
     from .context import ContextManager
     from .database import log_action
 
-    context = await ContextManager.get_active_context(
-        device_id=req.device_id or "asus",
-        request=text,
-    )
-
-    if req.target_device:
-        context["requested_device"] = req.target_device
-    emit_activity("Checking current context", category="perception", status="active", device_id=req.device_id)
-
-    async def _log_cb(src, intent, status, detail):
-        await log_action(device_id=src, command=intent, result=status, message=detail, command_id="")
-
-    result = await harness.process_request(
-        source_device_id=req.device_id or "asus",
-        natural_request=text,
-        context=context,
-        log_action_callback=_log_cb,
-    )
-
-    from .session_context import SessionContextManager
-    await SessionContextManager.update_session(req.device_id or "asus", text,
-        {"status": result.status, "message": result.message, "data": result.data},
-        result.action_plan.model_dump() if result.action_plan else None)
+    if not req.device_id:
+        raise HTTPException(status_code=400, detail="An authenticated source device is required.")
+    from .request_lifecycle import RequestLifecycle
+    import uuid
+    request_id = req.request_id or uuid.uuid4().hex
+    async def prepare():
+        context = await ContextManager.get_active_context(device_id=req.device_id, request=text)
+        if req.target_device:
+            context["requested_device"] = req.target_device
+        emit_activity("Checking current context", category="perception", status="active", device_id=req.device_id)
+        return context
+    async def audit(src, intent, status, detail):
+        await log_action(device_id=src, command=intent, result=status, message=detail, command_id=request_id)
+    async def deliver(task_id, result):
+        emit_activity("Chat request finished", category="execution", device_id=req.device_id,
+            task_id=task_id, status="completed" if result.status == "success" else "error")
+        await broadcast_control("task_state", {"task_id": task_id, "status": result.status})
+    result = await RequestLifecycle.submit(req.device_id, request_id, text, prepare, harness,
+        channel="gui", deliver=deliver, log_action_callback=audit)
     event_status = "active" if result.status == "in_progress" else "completed" if result.status == "success" else "error"
     emit_activity(f"Request outcome: {result.status}", category="execution", status=event_status, device_id=req.device_id)
 
@@ -480,6 +525,8 @@ async def set_autonomy_endpoint(req: AutonomyRequest):
     
     if not req.enabled:
         from .agent_turn import AgentTurn
+        from .request_lifecycle import RequestLifecycle
+        RequestLifecycle.cancel_all()
         for device in list(AgentTurn._devices):
             AgentTurn.cancel_for_device(device)
         # Emergency pause of active goals
@@ -506,6 +553,8 @@ async def stop_task_endpoint(task_id: str, req: TaskActionRequest = None):
     if goal:
         await gm.cancel_goal(task_id, reason="Cancelled from Control Center")
     elif stored:
+        from .request_lifecycle import RequestLifecycle
+        RequestLifecycle.cancel_task(task_id)
         AgentTurn.cancel_task(task_id)
         await update_task(task_id, {"status": "CANCELLED" if stored.get("type") == "agent_turn" else "cancelled"})
     elif execution:
@@ -538,14 +587,30 @@ class ResolveApprovalRequest(BaseModel):
     decision: str  # "approve" or "deny"
 
 
+@router.get("/approvals/{command_id}")
+async def approval_status_endpoint(command_id: str, request: Request):
+    """Origin-scoped status/expiry metadata, with no observation contents."""
+    row = await get_confirmation(command_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Approval not found")
+    if row.get("requested_by") != request.state.control_caller["device_id"]:
+        raise HTTPException(status_code=403, detail="Only the requesting device can inspect this approval")
+    from .approval_observability import snapshot
+    return {"command_id":command_id, "status":row["status"], **snapshot(command_id),
+            "server_now":datetime.now(timezone.utc).isoformat()}
+
+
 @router.post("/approvals/{command_id}/resolve")
-async def resolve_approval_endpoint(command_id: str, req: ResolveApprovalRequest):
+async def resolve_approval_endpoint(command_id: str, req: ResolveApprovalRequest, request: Request = None):
     """Resolve pending Tier 3 approval with allow or deny."""
     if req.decision not in ("approve", "deny"):
         raise HTTPException(status_code=400, detail="Decision must be 'approve' or 'deny'.")
 
     import hub.main as hub_main
-    success, msg = await hub_main._execute_resolve_confirmation(command_id, req.decision, "asus")
+    if request is None:
+        raise HTTPException(status_code=401, detail="An authenticated approving device is required.")
+    success, msg = await hub_main._execute_resolve_confirmation(command_id, req.decision,
+                                                              request.state.control_caller["device_id"])
     if not success:
         raise HTTPException(status_code=400, detail=msg)
 
@@ -566,6 +631,13 @@ async def cancel_transfer_endpoint(transfer_id: str):
     if not sess:
         raise HTTPException(status_code=404, detail="Transfer session not found.")
 
+    if sess.metadata.get("worker_protocol"):
+        from .peer_transfer import cancel_worker_transfer
+        try:
+            await cancel_worker_transfer(transfer_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"status": "success", "transfer_id": transfer_id, "state": "CANCELLED"}
     sess.state = "CANCELLED"
     sess.metadata["failure_reason"] = "Cancelled by user from Control Center"
     from .database import save_transfer_session
@@ -608,6 +680,16 @@ async def control_websocket_endpoint(websocket: WebSocket):
     Connects frontend with automatic initial state delivery,
     reconnect reconciliation, and event broadcasts.
     """
+    from .main import _authenticate_http_headers
+    try:
+        caller = await _authenticate_http_headers(websocket.headers.get("X-Cortex-Device"),
+            websocket.headers.get("X-Cortex-Secret"), websocket.cookies.get("cortex_session"))
+        if caller.get("role") not in {"admin", "primary_admin"}:
+            await websocket.close(code=4403)
+            return
+    except HTTPException:
+        await websocket.close(code=4401)
+        return
     await websocket.accept()
     CONTROL_CONNECTIONS.append(websocket)
     log.info(f"Control Center WebSocket connected (total={len(CONTROL_CONNECTIONS)})")
@@ -644,39 +726,24 @@ async def control_websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "send_message":
                 text = data.get("text", "").strip()
-                dev_id = data.get("device_id", "asus")
+                dev_id = caller["device_id"]
+                if data.get("device_id", dev_id) != dev_id:
+                    await websocket.send_json({"event": "error", "message": "A request cannot impersonate another device."})
+                    continue
                 is_voice = data.get("is_voice", False)
                 if text:
-                    emit_activity("Understanding request", category="planning", status="active", device_id=dev_id)
-                    import hub.main as hub_main
-                    harness = getattr(hub_main, "_agent_harness", None)
-                    if harness is None:
-                        from .agent_harness import AgentHarness
-                        from .control_layer import CortexControlLayer
-                        conn_devs = getattr(hub_main, "CONNECTED_DEVICES", {})
-                        harness = AgentHarness(CortexControlLayer(conn_devs))
-
-                    from .context import ContextManager
-                    ctx = await ContextManager.get_active_context(device_id=dev_id, request=text)
-                    result = await harness.process_request(source_device_id=dev_id, natural_request=text, context=ctx)
-
-                    resp = {
-                        "user_message": text,
-                        "response_text": result.message,
-                        "status": result.status,
-                        "action_plan": result.action_plan.model_dump() if result.action_plan else None,
-                        "is_voice": is_voice,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }
-                    emit_activity(f"Completed request: {result.status}", category="execution", status="completed", device_id=dev_id)
-                    await broadcast_control("conversation", resp)
+                    await send_message_endpoint(MessageRequest(text=text, device_id=dev_id,
+                        target_device=data.get("target_device"), is_voice=is_voice, request_id=data.get("request_id")))
 
             elif msg_type == "resolve_approval":
                 cid = data.get("command_id")
                 dec = data.get("decision", "deny")
                 if cid:
                     import hub.main as hub_main
-                    success, msg = await hub_main._execute_resolve_confirmation(cid, dec, "asus")
+                    success, msg = await hub_main._execute_resolve_confirmation(cid, dec, caller["device_id"])
+                    if not success:
+                        await websocket.send_json({"event": "error", "message": msg})
+                        continue
                     emit_activity(f"Approval '{cid[:8]}' resolved: {dec.upper()}", category="approval", status="completed")
                     state = await build_canonical_state()
                     await broadcast_control("approval_state", state["approvals"])
@@ -686,6 +753,8 @@ async def control_websocket_endpoint(websocket: WebSocket):
                 gm = GoalManager.get_instance()
                 await gm.set_autonomy_enabled(en)
                 if not en:
+                    from .request_lifecycle import RequestLifecycle
+                    RequestLifecycle.cancel_all()
                     from .agent_turn import AgentTurn
                     for device in list(AgentTurn._devices):
                         AgentTurn.cancel_for_device(device)
@@ -712,6 +781,13 @@ async def control_websocket_endpoint(websocket: WebSocket):
                     ftm = FileTransferManager.get_instance()
                     sess = await ftm.get_session(xid)
                     if sess:
+                        if sess.metadata.get("worker_protocol"):
+                            from .peer_transfer import cancel_worker_transfer
+                            try:
+                                await cancel_worker_transfer(xid)
+                            except ValueError as exc:
+                                await websocket.send_json({"event": "error", "message": str(exc)})
+                            continue
                         sess.state = "CANCELLED"
                         from .database import save_transfer_session
                         await save_transfer_session(sess.to_dict())

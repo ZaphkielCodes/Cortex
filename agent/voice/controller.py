@@ -168,6 +168,7 @@ class VoiceController:
         self._session_task: Optional[asyncio.Task] = None
         self._in_session = False
         self._stopped = True
+        self._pending_wake_audio = b""
         self._already_running = False
         self._last_wake_time: Optional[float] = None
         self.last_latency_metrics: dict = {}
@@ -262,8 +263,9 @@ class VoiceController:
         self._last_wake_time = time.monotonic()
         log.info(f"[Latency] Wake detected: {self._last_wake_time:.3f}s")
         self.wakeword.stop()
+        take_audio = getattr(self.wakeword, "take_audio", None)
+        self._pending_wake_audio = take_audio() if callable(take_audio) else b""
         self._audio_owner = AudioOwner.NONE
-        
         self._loop.call_soon_threadsafe(self._start_session, "wake_word")
 
     def push_to_talk(self):
@@ -288,7 +290,8 @@ class VoiceController:
             log.info(f"Cancelling previous active session task before starting new session ({source}).")
             self._session_task.cancel()
         self.stt.stop_listening()
-        
+        if source != "wake_word":
+            self._pending_wake_audio = b""
         session_id = uuid.uuid4().hex[:8]
         self._current_session_id = session_id
         
@@ -381,6 +384,14 @@ class VoiceController:
                     self._acquire_audio_owner(AudioOwner.ACTIVE_STT, session_id)
                     self._set_state(VoiceState.LISTENING, session_id)
                     try:
+                        wait_stopped = getattr(self.wakeword, "wait_stopped", None)
+                        if callable(wait_stopped) and not await asyncio.to_thread(wait_stopped):
+                            raise RuntimeError("Wake microphone did not close before command capture")
+                        initial_audio = getattr(self, "_pending_wake_audio", b"")
+                        self._pending_wake_audio = b""
+                        seed_audio = getattr(self.stt, "set_initial_audio", None)
+                        if callable(seed_audio):
+                            seed_audio(initial_audio)
                         async for is_final, text in self.stt.listen_stream():
                             if not self._unsolicited_queue.empty():
                                 log.info(f"[Interaction][session={session_id}][id={interaction_id}] STT interrupted by unsolicited speech.")
@@ -411,6 +422,14 @@ class VoiceController:
                     continue
 
                 text = final_text.strip()
+                # No intent repair or app-specific grammar: unreliable audio is repeated.
+                if getattr(self.stt, "last_transcription_uncertain", False):
+                    await self._play_tts("I couldn't hear that clearly. Please repeat the full request.", session_id)
+                    continue
+                import re
+                wake_word = getattr(self.wakeword, "wake_word", "")
+                if isinstance(wake_word, str) and wake_word:
+                    text = re.sub(r"^" + re.escape(wake_word) + r"(?:[\s,.!?]+|$)", "", text, flags=re.IGNORECASE).strip()
 
                 # Local session-exit intent detection
                 if is_session_exit_command(text):

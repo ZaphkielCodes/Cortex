@@ -1,0 +1,95 @@
+[
+  {
+    "id": "launch",
+    "category": "app launch",
+    "prompt": "Please bring Windows Paint into view."
+  },
+  {
+    "id": "context",
+    "category": "current-context question",
+    "prompt": "Which program did I just ask you to bring up?"
+  },
+  {
+    "id": "compound",
+    "category": "compound app + UI action",
+    "prompt": "In Paint, start a fresh blank canvas using its interface and leave the picture unsaved."
+  },
+  {
+    "id": "folder",
+    "category": "file/folder access",
+    "prompt": "Show the contents of the benchmark folder at {fixture} in File Explorer."
+  },
+  {
+    "id": "foreground",
+    "category": "foreground/current-app query",
+    "prompt": "Name the program that has keyboard focus at this instant; application metadata alone is enough."
+  },
+  {
+    "id": "telemetry",
+    "category": "CPU/device telemetry",
+    "prompt": "Measure the processor load on this Windows machine and give me the percentage."
+  },
+  {
+    "id": "weather",
+    "category": "weather",
+    "prompt": "What are the current outdoor conditions in Reykjavik, Iceland?"
+  },
+  {
+    "id": "conversation",
+    "category": "follow-up seed",
+    "prompt": "In two sentences, explain why a computer cache can reduce waiting."
+  },
+  {
+    "id": "followup",
+    "category": "follow-up",
+    "prompt": "Now give me an everyday analogy for that explanation."
+  },
+  {
+    "id": "pronoun",
+    "category": "pronoun/deictic reference",
+    "prompt": "Make it one sentence, keeping the same analogy."
+  },
+  {
+    "id": "correction",
+    "category": "correction",
+    "prompt": "I meant a CPU cache, not a browser cache; adjust the analogy to reflect that distinction."
+  },
+  {
+    "id": "background",
+    "category": "background task",
+    "prompt": "Wait twenty-two seconds using a bounded wait, then report that the pause has finished. Do not change any documents."
+  },
+  {
+    "id": "cancel",
+    "category": "cancellation",
+    "prompt": "Pause for twenty-six seconds, then say the countdown ended.",
+    "cancel_after_seconds": 5
+  },
+  {
+    "id": "approval",
+    "category": "approval",
+    "prompt": "Read the clipboard contents for this privacy approval test. If permission is denied, stop."
+  },
+  {
+    "id": "unsupported",
+    "category": "unsupported request",
+    "prompt": "Change the physical colour of the wall behind this laptop to green."
+  },
+  {
+    "id": "offline",
+    "category": "remote/offline device",
+    "prompt": "On the enrolled benchmark-offline worker, start Paint; do not substitute another machine.",
+    "cancel_after_seconds": 8
+  },
+  {
+    "id": "provider_failure",
+    "category": "provider failure",
+    "prompt": "Give a brief definition of a compiler."
+  },
+  {
+    "id": "restart",
+    "category": "restart recovery",
+    "prompt": "Wait twenty-seven seconds, then report completion. Make no desktop changes.",
+    "restart_after_seconds": 6
+  }
+]

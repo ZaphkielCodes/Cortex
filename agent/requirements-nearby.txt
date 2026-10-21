@@ -1,0 +1,4 @@
+bleak>=3.0.0
+winrt-Windows.Devices.WiFiDirect>=3.0.0; sys_platform == 'win32'
+winrt-Windows.Devices.Bluetooth.Advertisement>=3.0.0; sys_platform == 'win32'
+winrt-Windows.Security.Credentials>=3.0.0; sys_platform == 'win32'

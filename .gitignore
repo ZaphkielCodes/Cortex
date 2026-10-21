@@ -62,3 +62,7 @@ token.json
 /scripts/rekey_asus.py
 /scripts/run_lenovo_agent.py
 /scripts/run_lenovo_agent.bat
+/android/.gradle/
+/android/local.properties
+/android/**/build/
+*.jks

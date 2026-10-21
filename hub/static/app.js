@@ -4,6 +4,23 @@ let ws = null;
 let currentDeviceId = '';
 let currentSecret = '';
 
+function requireLogin() {
+    if (ws) ws.stop();
+    ws = null;
+    currentSecret = '';
+    document.getElementById('login-secret').value = '';
+    sessionStorage.removeItem('cortex_device_id');
+    loginScreen.classList.remove('hidden');
+    appScreen.classList.add('hidden');
+    document.getElementById('login-error').innerText = 'Sign in again to reconnect.';
+}
+
+async function checkSession() {
+    const response = await fetch('/integrations/');
+    return ![401, 403].includes(response.status);
+}
+
+
 // DOM Elements
 const loginScreen = document.getElementById('login-screen');
 const appScreen = document.getElementById('app-screen');
@@ -34,6 +51,8 @@ loginBtn.addEventListener('click', async () => {
         });
         
         if (res.ok) {
+            currentSecret = '';
+            document.getElementById('login-secret').value = '';
             sessionStorage.setItem('cortex_device_id', currentDeviceId);
             loginScreen.classList.add('hidden');
             appScreen.classList.remove('hidden');
@@ -67,7 +86,9 @@ function initApp() {
     if (window.location.hash) {
         const viewName = window.location.hash.substring(1);
         const tab = document.querySelector(`.sidebar li[data-view="${viewName}"]`);
-        if (tab) tab.click();
+        // Auto-login runs before navigation listeners are registered below.
+        // Restore the requested view after this script has finished initializing.
+        if (tab) queueMicrotask(() => tab.click());
     }
 }
 
@@ -144,18 +165,17 @@ async function loadTasks() {
 }
 
 async function loadIntegrations() {
-    const res = await fetch('/integrations');
-    const data = await res.json();
     const list = document.getElementById('integrations-list');
-    list.innerHTML = '';
-    data.integrations.forEach(i => {
-        list.innerHTML += `<div class="card">
-            <h3>${i.plugin_name}</h3>
-            <p>Account: ${i.account_id}</p>
-            <p>Status: <strong>${i.status}</strong></p>
-            <a href="/integrations/${i.plugin_name}/auth?account_id=${i.account_id}" target="_blank">Re-authenticate</a>
-        </div>`;
-    });
+    try {
+        const res = await fetch('/integrations/');
+        if ([401, 403].includes(res.status)) { requireLogin(); return; }
+        if (!res.ok) throw new Error('Integration state unavailable');
+        const data = await res.json();
+        if (!Array.isArray(data.integrations)) throw new Error('Invalid integration state');
+        window.CortexIntegrations.render(list, data.integrations, document);
+    } catch (_) {
+        list.textContent = 'Integration state unavailable. Reconnect or refresh to try again.';
+    }
 }
 
 // Render Functions
@@ -302,47 +322,36 @@ window.updatePermission = async function(deviceId, capability, decision) {
 
 window.resolveApproval = function(commandId, decision) {
     if (!ws) return;
-    ws.send(JSON.stringify({
-        type: 'confirmation_response',
+    ws.send({
+        type: 'resolve_approval',
         command_id: commandId,
         decision: decision
-    }));
-    document.getElementById(`approval-${commandId}`).remove();
-    updateBadge(document.querySelectorAll('.approval-card').length);
+    });
+    // Resolution is confirmed by the authenticated server's approval_state event.
 };
 
-// WebSocket
+// WebSocket: reuse the existing browser session, including after a page refresh.
 function connectWebSocket() {
+    if (ws) ws.stop();
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${protocol}//${window.location.host}/ws-cli`);
-
-    ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        
-        if (data.type === 'auth_challenge') {
-            ws.send(JSON.stringify({
-                type: 'auth_response',
-                device_id: currentDeviceId,
-                response: currentSecret
-            }));
+    ws = window.CortexDashboardConnection.create({
+        WebSocket,
+        url: `${protocol}//${window.location.host}/ws-control`,
+        checkSession,
+        onAuthRequired: requireLogin,
+        onConnected: () => {
+            loadDevices(); loadApprovals(); loadTasks(); loadIntegrations();
+        },
+        onEvent: data => {
+            if (data.event === 'device_state') loadDevices();
+            else if (data.event === 'approval_state') loadApprovals();
+            else if (data.event === 'task_state') { loadTasks(); loadIntegrations(); }
+            else if (data.event === 'initial_state') loadIntegrations();
+            else if (data.event === 'activity') loadActivity();
+            else if (data.event === 'error') {
+                document.getElementById('login-error').innerText = data.message || 'Request failed.';
+            }
         }
-        else if (data.event === 'device_connected' || data.event === 'device_disconnected') {
-            loadDevices(); // simplest is to reload the grid
-        }
-        else if (data.event === 'result') {
-            prependActivityRow(new Date().toISOString(), data.device_id, data.command, data.status, data.message);
-        }
-        else if (data.event === 'confirmation_request') {
-            renderApprovalCard(data);
-            updateBadge(document.querySelectorAll('.approval-card').length);
-        }
-        else if (data.event === 'task_updated') {
-            loadTasks();
-        }
-    };
-    
-    ws.onclose = () => {
-        console.log("WS closed. Reconnecting in 3s...");
-        setTimeout(connectWebSocket, 3000);
-    };
+    });
+    ws.start();
 }

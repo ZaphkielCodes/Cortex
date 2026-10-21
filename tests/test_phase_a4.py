@@ -176,8 +176,8 @@ def test_system_models_introspection():
     # Mock provider reports its name and model
     cr = purposes["conversational_reasoning"]
     assert cr["provider"] == "mock"
-    assert cr["model"] == "mock-v1"
-    assert cr["availability"] is True
+    assert cr["model"] == "mock"
+    assert cr["availability"] is False
 
     # Unconfigured modalities report unknown / False
     assert purposes["speech_recognition"]["provider"] == "unknown"
@@ -414,25 +414,16 @@ def test_system_providers_no_secret_exposure():
 
 @pytest.mark.asyncio
 async def test_system_explain_capability():
-    """Verify system.explain_capability distinguishes unsupported, missing integration, etc."""
-    reg = SystemRegistry.get_instance()
-
-    # 1. Missing integration (Gmail)
-    exp_gmail = await reg.explain_capability("Why can't you read Gmail?")
-    assert exp_gmail["category"] == "missing_integration"
-    assert exp_gmail["can_run"] is False
-    assert "not currently connected or authorized" in exp_gmail["explanation"]
-
-    # 2. Unsupported task (Hardware / 3D printing)
-    exp_3d = await reg.explain_capability("Can you 3D print a door hinge?")
-    assert exp_3d["category"] == "unsupported"
-    assert exp_3d["can_run"] is False
-    assert "Hardware fabrication" in exp_3d["explanation"]
-
-    # 3. Available capability
-    exp_screen = await reg.explain_capability("screen.capture")
-    assert exp_screen["category"] == "supported_and_available"
-    assert exp_screen["can_run"] is True
+    """Exact canonical inspection; free-form interpretation belongs to the model."""
+    reg=SystemRegistry.get_instance()
+    for phrase in ["Why can't you read Gmail?", "Can you 3D print a door hinge?"]:
+        result=await reg.explain_capability(phrase)
+        assert result["category"]=="unsupported" and result["can_run"] is False
+    from hub.capability_registry import CanonicalCapabilityRegistry
+    cap=CanonicalCapabilityRegistry.get_instance().get_capability("screen.capture")
+    result=await reg.explain_capability("screen.capture")
+    assert result["can_run"] == cap.availability
+    assert result["capability"] == "screen.capture"
 
 
 # ===========================================================================
@@ -440,211 +431,112 @@ async def test_system_explain_capability():
 # ===========================================================================
 
 @pytest.mark.asyncio
-async def test_required_physical_test_1_identity():
-    """
-    REQUIRED PHYSICAL TEST 1 — IDENTITY:
-    Ask Cortex: 'What are you?'
-    Expected:
-    - Identifies itself as Cortex
-    - Describes itself using runtime product metadata
-    - Does NOT say it is Gemini
-    """
-    control = CortexControlLayer({})
-    harness = AgentHarness(control_layer=control)
-    context = {"device": {"id": "asus"}, "session": {}}
-
-    resp = await harness.process_request("asus", "What are you?", context, None)
+async def test_required_physical_test_1_identity(monkeypatch):
+    """Model-selected identity reads real product metadata, not provider identity."""
+    harness, _ = await native_harness(monkeypatch, EvidenceModel("system.identity"))
+    resp = await harness.process_request("asus", "What are you?", {})
     assert resp.status == "success"
-    assert "I am Cortex" in resp.message
-    assert "hybrid" in resp.message
-    assert "Gemini" not in resp.message
-    assert "OpenAI" not in resp.message
+    assert resp.data["product_name"] == "Cortex"
+    assert "Gemini" not in resp.data["product_name"]
+    assert resp.provenance["capability"] == "system.identity"
+
 
 
 @pytest.mark.asyncio
-async def test_required_physical_test_2_model():
-    """
-    REQUIRED PHYSICAL TEST 2 — MODEL:
-    Ask: 'What model are you using right now?'
-    Expected:
-    - Reports actual configured provider/model if known
-    - Distinguishes Cortex from provider model
-    """
-    mock_llm = MockLLMProvider()
-    set_llm_provider(mock_llm)
-
-    control = CortexControlLayer({})
-    harness = AgentHarness(control_layer=control)
-    context = {"device": {"id": "asus"}, "session": {}}
-
-    resp = await harness.process_request("asus", "What model are you using right now?", context, None)
+async def test_required_physical_test_2_model(monkeypatch):
+    """Introspection retains actual provider metadata and offline availability."""
+    set_llm_provider(MockLLMProvider())
+    harness, _ = await native_harness(monkeypatch, EvidenceModel("system.models"))
+    resp = await harness.process_request("asus", "What model are you using right now?", {})
     assert resp.status == "success"
-    # Distinguishes Cortex product from provider model
-    assert "Cortex" in resp.message
-    assert "mock" in resp.message
-    assert "mock-v1" in resp.message
+    rows = resp.data["result"]
+    current = next(r for r in rows if r["purpose"] == "conversational_reasoning")
+    assert current == {"purpose":"conversational_reasoning","provider":"mock","model":"mock","availability":False}
+
 
 
 @pytest.mark.asyncio
-async def test_required_failure_test_model_metadata_unavailable():
-    """
-    REQUIRED FAILURE TEST:
-    Remove/disable runtime model metadata.
-    Ask: 'What model are you using?'
-    Expected:
-    - Cortex answers: model metadata is unavailable / unknown
-    - Does NOT guess or hallucinate
-    """
-    reg = SystemRegistry.get_instance()
-    reg.set_model_metadata_override([
-        {
-            "purpose": "conversational_reasoning",
-            "provider": "unknown",
-            "model": "unknown",
-            "availability": False,
-        }
-    ])
-
-    control = CortexControlLayer({})
-    harness = AgentHarness(control_layer=control)
-    context = {"device": {"id": "asus"}, "session": {}}
-
-    resp = await harness.process_request("asus", "What model are you using?", context, None)
+async def test_required_failure_test_model_metadata_unavailable(monkeypatch):
+    """Unknown metadata remains unknown through result interpretation."""
+    SystemRegistry.get_instance().set_model_metadata_override([{"purpose":"conversational_reasoning","provider":"unknown","model":"unknown","availability":False}])
+    harness, _ = await native_harness(monkeypatch, EvidenceModel("system.models"))
+    resp = await harness.process_request("asus", "What model are you using?", {})
     assert resp.status == "success"
-    assert "Active model metadata is currently unavailable or unknown" in resp.message
-    assert "Gemini" not in resp.message
-    assert "GPT" not in resp.message
+    assert resp.data["result"][0]["model"] == "unknown"
+    assert resp.data["result"][0]["availability"] is False
+    assert "Gemini" not in resp.message and "GPT" not in resp.message
+
 
 
 @pytest.mark.asyncio
-async def test_required_physical_test_3_capabilities():
-    """
-    REQUIRED PHYSICAL TEST 3 — CAPABILITIES:
-    Ask: 'What can you actually do?'
-    Expected answer derived from live Capability Registry.
-    Verify A1-A3 capabilities appear.
-    """
-    control = CortexControlLayer({})
-    harness = AgentHarness(control_layer=control)
-    context = {"device": {"id": "asus"}, "session": {}}
-
-    resp = await harness.process_request("asus", "What can you actually do?", context, None)
+async def test_required_physical_test_3_capabilities(monkeypatch):
+    """Capability answers originate in the canonical registry, not a word list."""
+    model = EvidenceModel("system.list_capabilities")
+    harness, _ = await native_harness(monkeypatch, model)
+    resp = await harness.process_request("asus", "What can you actually do?", {})
     assert resp.status == "success"
-    # Live capabilities summary includes A1-A3 capabilities
-    assert "web search" in resp.message.lower()
-    assert "weather" in resp.message.lower()
-    assert "screen" in resp.message.lower()
-    assert "application" in resp.message.lower()
-    assert "file" in resp.message.lower()
+    names = {r["name"] for r in resp.data["result"]}
+    assert {"web.search","weather.current","screen.capture","app.launch","fs.open"} <= names
+    assert names == {r["name"] for r in SystemRegistry.get_instance().list_capabilities()}
 
-    # Structured data contains the actual live list
-    assert resp.data is not None
-    assert "capabilities" in resp.data
-    cap_names = {c["name"] for c in resp.data["capabilities"]}
-    assert "web.search" in cap_names
-    assert "screen.capture" in cap_names
-    assert "app.launch" in cap_names
 
 
 @pytest.mark.asyncio
-async def test_required_physical_test_4_availability_conversational():
-    """
-    REQUIRED PHYSICAL TEST 4 — AVAILABILITY (Conversational):
-    Disable weather provider.
-    Ask: 'Can you check the weather?' -> No / currently unavailable.
-    Re-enable it and ask again -> Yes without code changes.
-    """
-    control = CortexControlLayer({})
-    harness = AgentHarness(control_layer=control)
-    context = {"device": {"id": "asus"}, "session": {}}
-
-    # 1. Disable weather provider
-    os.environ["CORTEX_WEATHER_ENABLED"] = "false"
+async def test_required_physical_test_4_availability_conversational(monkeypatch):
+    """Availability changes are visible without changing request routing."""
+    model = EvidenceModel("system.capability_status", {"capability":"weather.current"})
+    harness, _ = await native_harness(monkeypatch, model)
+    monkeypatch.setenv("CORTEX_WEATHER_ENABLED","false")
     set_weather_provider_override(None)
-
-    resp_disabled = await harness.process_request("asus", "Can you check the weather?", context, None)
-    assert resp_disabled.status == "error"
-    assert "weather access is currently unavailable" in resp_disabled.message.lower()
-
-    # 2. Re-enable weather provider
-    os.environ["CORTEX_WEATHER_ENABLED"] = "true"
+    disabled = await harness.process_request("asus", "Can you check the weather?", {})
+    assert disabled.status == "success" and disabled.data["all_available"] is False
+    monkeypatch.setenv("CORTEX_WEATHER_ENABLED","true")
     set_weather_provider_override(DummyActiveWeatherProvider())
+    enabled = await harness.process_request("asus", "Can you check the weather?", {})
+    assert enabled.status == "success" and enabled.data["all_available"] is True
 
-    resp_enabled = await harness.process_request("asus", "Can you check the weather?", context, None)
-    assert resp_enabled.status == "success"
-    assert "yes" in resp_enabled.message.lower()
-    assert "weather" in resp_enabled.message.lower()
 
 
 @pytest.mark.asyncio
-async def test_required_physical_test_5_devices():
-    """
-    REQUIRED PHYSICAL TEST 5 — DEVICES:
-    Ask: 'What devices are connected?'
-    Cortex should report only known/enrolled runtime device state.
-    Do not fabricate offline/online nodes.
-    """
-    control = CortexControlLayer({})
-    harness = AgentHarness(control_layer=control)
-    context = {"device": {"id": "asus"}, "session": {}}
-
-    resp = await harness.process_request("asus", "What devices are connected?", context, None)
+async def test_required_physical_test_5_devices(monkeypatch):
+    """Device answers contain enrolled state and never invented machines."""
+    harness, _ = await native_harness(monkeypatch, EvidenceModel("system.list_devices"))
+    resp = await harness.process_request("asus", "What devices are connected?", {})
     assert resp.status == "success"
-    assert "Connected devices" in resp.message
-    assert "asus" in resp.message.lower()
-    assert resp.data is not None
-    assert "devices" in resp.data
-    # Verify no imaginary devices
-    for d in resp.data["devices"]:
-        assert d["device_id"] in ("asus", "macbook_remote") or d["trusted"] is True
+    rows = resp.data["result"]
+    assert "asus" in {r["device_id"] for r in rows}
+    enrolled = {r["device_id"] for r in await database.list_devices()}
+    assert {r["device_id"] for r in rows} <= enrolled
+
 
 
 @pytest.mark.asyncio
-async def test_required_physical_test_6_integrations():
-    """
-    REQUIRED PHYSICAL TEST 6 — INTEGRATIONS:
-    Ask:
-    'Do you have access to my calendar?'
-    'Do you have Gmail access?'
-    Responses must reflect actual OAuth/integration state.
-    """
-    control = CortexControlLayer({})
-    harness = AgentHarness(control_layer=control)
-    context = {"device": {"id": "asus"}, "session": {}}
-
-    # Live state: Google Calendar has authorized tokens in CredentialStore
-    resp_cal = await harness.process_request("asus", "Do you have access to my calendar?", context, None)
-    assert resp_cal.status == "success"
-    assert "Google Calendar is connected and authorized" in resp_cal.message
-
-    # Live state: Gmail does NOT have authorized tokens
-    resp_gmail = await harness.process_request("asus", "Do you have Gmail access?", context, None)
-    assert resp_gmail.status == "error"
-    assert "Gmail access is not currently connected" in resp_gmail.message
-
-    # Test disconnected override for Calendar
+async def test_required_physical_test_6_integrations(monkeypatch):
+    """Integration facts reflect explicit connected/disconnected registry state."""
     reg = SystemRegistry.get_instance()
-    reg.set_integration_override("calendar", {"connected": False})
+    reg.set_integration_override("calendar", {"connected":True,"status":"authorized"})
+    reg.set_integration_override("gmail", {"connected":False,"status":"not_connected"})
+    for integration, expected in [("calendar",True),("gmail",False)]:
+        harness, _ = await native_harness(monkeypatch, EvidenceModel("system.integration_status", {"integration":integration}))
+        resp = await harness.process_request("asus", "Do you have access to that integration?", {})
+        assert resp.status == "success" and resp.data["connected"] is expected
+    reg.set_integration_override("calendar", {"connected":False,"status":"not_connected"})
+    harness, _ = await native_harness(monkeypatch, EvidenceModel("system.integration_status", {"integration":"calendar"}))
+    assert (await harness.process_request("asus", "And now?", {})).data["connected"] is False
 
-    resp_cal_disc = await harness.process_request("asus", "Do you have access to my calendar?", context, None)
-    assert resp_cal_disc.status == "error"
-    assert "Google Calendar access is not currently connected" in resp_cal_disc.message
 
 
 @pytest.mark.asyncio
-async def test_conversational_limitation_explanation():
-    """
-    Verify conversational routing intercepts 'Why can't you read Gmail?'
-    and answers deterministically without generic LLM fallback.
-    """
-    control = CortexControlLayer({})
-    harness = AgentHarness(control_layer=control)
-    context = {"device": {"id": "asus"}, "session": {}}
+async def test_conversational_limitation_explanation(monkeypatch):
+    """A disconnected integration is evidence, not a canned NL interception."""
+    SystemRegistry.get_instance().set_integration_override("gmail", {"connected":False,"status":"not_connected"})
+    model = EvidenceModel("system.integration_status", {"integration":"gmail"})
+    harness, _ = await native_harness(monkeypatch, model)
+    resp = await harness.process_request("asus", "Why can't you read Gmail?", {})
+    assert resp.status == "success" and resp.data["connected"] is False
+    assert resp.data["status"] == "not_connected"
+    assert model.calls[0]["mode"] == "agent_decision"
 
-    resp = await harness.process_request("asus", "Why can't you read Gmail?", context, None)
-    assert resp.status == "success"
-    assert "Gmail access is not currently connected or authorized" in resp.message
-    assert "As an AI language model" not in resp.message
 
 
 # ===========================================================================
@@ -662,7 +554,8 @@ async def test_planner_respects_registry_availability():
     os.environ["CORTEX_WEATHER_ENABLED"] = "false"
     set_weather_provider_override(None)
 
-    planner = GoalPlanner.get_instance()
+    from model_contract_fixtures import PlanModel, plan_step
+    planner = GoalPlanner.get_instance(model_router=PlanModel([plan_step("weather.current",location="Boston")],[plan_step("weather.current",location="Boston")]))
     context_caps = await planner.build_capability_context(target_device="asus")
     cap_names = {c["name"] for c in context_caps}
 
@@ -719,3 +612,6 @@ def test_production_db_isolation():
     db_path = os.environ.get("CORTEX_DB_PATH", "")
     assert "test_cortex.db" in db_path
     assert not db_path.endswith("data/cortex.db") and not db_path.endswith("data\\cortex.db")
+
+from model_contract_fixtures import native_harness, EvidenceModel
+from hub import database

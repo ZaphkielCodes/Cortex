@@ -1,0 +1,103 @@
+[
+  {
+    "id": "launch",
+    "category": "app launch",
+    "prompt": "Bring up the Windows calculator so I can use it."
+  },
+  {
+    "id": "compound",
+    "category": "compound UI task",
+    "prompt": "In that calculator, use its interface to select Scientific mode. Leave the input empty.",
+    "allow_calculator_ui": true,
+    "deadline_seconds": 180
+  },
+  {
+    "id": "folder",
+    "category": "folder navigation",
+    "prompt": "Navigate File Explorer to this exact practice directory: {fixture}. Leave the files unchanged."
+  },
+  {
+    "id": "foreground",
+    "category": "current app",
+    "prompt": "Which application is in the foreground now? Read only its process metadata; I am not asking you to read the window contents."
+  },
+  {
+    "id": "cpu",
+    "category": "CPU",
+    "prompt": "Take a fresh CPU utilisation reading for this computer and tell me the number."
+  },
+  {
+    "id": "weather",
+    "category": "weather",
+    "prompt": "Check the weather currently reported for Dunedin, New Zealand, including the temperature."
+  },
+  {
+    "id": "context",
+    "category": "current-context question",
+    "prompt": "Which New Zealand city did you just check for me?"
+  },
+  {
+    "id": "conversation",
+    "category": "conversation",
+    "prompt": "Compare RAM and an SSD for a first-year computing student, in two short sentences."
+  },
+  {
+    "id": "followup",
+    "category": "follow-up",
+    "prompt": "Turn that comparison into a desk-and-filing-cabinet analogy."
+  },
+  {
+    "id": "pronoun",
+    "category": "pronoun follow-up",
+    "prompt": "Shorten it to one sentence without changing what the two objects stand for."
+  },
+  {
+    "id": "correction",
+    "category": "correction",
+    "prompt": "Small correction: make the cabinet a hard disk rather than an SSD, and say what gets lost when power is removed."
+  },
+  {
+    "id": "background",
+    "category": "background task",
+    "prompt": "Hold off for seventeen seconds using a bounded timer, then confirm the delay ended. No other action is needed.",
+    "deadline_seconds": 150
+  },
+  {
+    "id": "cancel",
+    "category": "cancellation",
+    "prompt": "Begin a twenty-four-second pause and report when it ends.",
+    "cancel_after_seconds": 3,
+    "cancel_when_command": "ui.wait",
+    "deadline_seconds": 150
+  },
+  {
+    "id": "approval",
+    "category": "approval",
+    "prompt": "Request permission to delete this practice file: {fixture}\\approval-target.txt. If the permission is refused, stop and preserve the file."
+  },
+  {
+    "id": "unsupported",
+    "category": "unsupported request",
+    "prompt": "Physically fold the laundry sitting next to my computer."
+  },
+  {
+    "id": "offline",
+    "category": "remote/offline device",
+    "prompt": "Launch Calculator on device benchmark-offline only. Keep the request there if that device is disconnected; do not use this computer instead.",
+    "cancel_after_seconds": 12,
+    "deadline_seconds": 150
+  },
+  {
+    "id": "provider_failure",
+    "category": "provider failure",
+    "prompt": "Explain what a linker does in one brief sentence."
+  },
+  {
+    "id": "restart",
+    "category": "restart recovery",
+    "prompt": "Run a twenty-seven-second bounded pause, then let me know whether it finished.",
+    "restart_after_seconds": 2,
+    "restart_when_command": "ui.wait",
+    "deadline_seconds": 150
+  }
+]

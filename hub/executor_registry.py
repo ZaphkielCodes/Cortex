@@ -274,11 +274,6 @@ class ExecutorRegistry:
             handle = self._handles.get(device_id)
             if handle is not None and not handle.online:
                 return False
-            # Standalone local host fallback:
-            # When running locally without active websocket connections or ControlLayer map,
-            # the primary admin node "asus" functions as the local runtime node.
-            if not self._live_connections and (conn_map is None or not conn_map) and device_id == "asus":
-                return True
             return False
 
         # Check heartbeat freshness
@@ -306,24 +301,6 @@ class ExecutorRegistry:
 
         handle = self._handles.get(device_id)
         if not handle:
-            if device_id == "asus":
-                from .capability_registry import get_core_capabilities
-                caps = list(get_core_capabilities().keys())
-                for c in ["device.status", "ui.notify", "app.launch", "app.close", "screen.capture", "fs.open", "fs.move", "fs.stat", "fs.list"]:
-                    if c not in caps:
-                        caps.append(c)
-                handle = DeviceHandle(
-                    device_id="asus",
-                    display_name="ASUS Laptop",
-                    device_type="laptop",
-                    platform="windows",
-                    role="primary_admin",
-                    trust_level="admin",
-                    online=self.is_device_online("asus"),
-                    capabilities=caps,
-                )
-                self._handles["asus"] = handle
-                return handle
             return None
 
         # Synchronize live online state
@@ -334,9 +311,6 @@ class ExecutorRegistry:
         """List all known execution node handles with synchronized live state."""
         if self._overrides is not None:
             return list(self._overrides)
-
-        if "asus" not in self._handles:
-            self.get_device_handle("asus")
 
         handles: List[DeviceHandle] = []
         for dev_id, h in self._handles.items():

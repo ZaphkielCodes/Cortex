@@ -242,13 +242,19 @@ def list_windows(args: Union[list, dict] = None) -> Dict[str, Any]:
                         pname = psutil.Process(pid.value).name()
                     except Exception:
                         pass
+                    from .window_identity import window_identity
+                    try:
+                        identity = window_identity(hwnd, user32)
+                    except Exception:
+                        identity = {}
 
                     w_info = {
                         "window_id": int(hwnd),
                         "handle": int(hwnd),
                         "title": title,
-                        "process_name": pname,
-                        "pid": pid.value,
+                        "process_name": identity.get("foreground_app") or pname,
+                        "pid": identity.get("pid") or pid.value,
+                        "host_pid": identity.get("host_pid") or pid.value,
                         "visible": True,
                         "minimized": is_min,
                         "foreground": is_fg,
@@ -329,6 +335,8 @@ def focus_window(args: Union[list, dict]) -> Dict[str, Any]:
 
     target_window_id = None
     target_str = ""
+    expected_pid = args.get("pid") if isinstance(args,dict) else None
+    expected_process = args.get("process") if isinstance(args,dict) else None
 
     if isinstance(args, dict):
         target_window_id = args.get("window_id") or args.get("handle")
@@ -346,6 +354,14 @@ def focus_window(args: Union[list, dict]) -> Dict[str, Any]:
     windows = win_res.get("windows", [])
     matches = _find_matching_windows(target_str, windows, target_window_id)
 
+    if expected_pid:
+        matches = [w for w in windows if w.get("pid") == expected_pid and
+                   (not target_window_id or w.get("window_id") == target_window_id)]
+    if expected_process:
+        process_key = lambda value: str(value or "").casefold().removesuffix(".exe")
+        matches = [w for w in windows if process_key(w.get("process_name")) == process_key(expected_process)
+                   and (not expected_pid or w.get("pid") == expected_pid)
+                   and (not target_window_id or w.get("window_id") == target_window_id)]
     if not matches:
         return {
             "status": "failure",
@@ -411,12 +427,12 @@ def focus_window(args: Union[list, dict]) -> Dict[str, Any]:
                 break
             time.sleep(0.05)
 
-        target_win["foreground"] = True
+        target_win["foreground"] = verified
         return {
-            "status": "success",
-            "message": f"Focused window '{target_win['title']}'",
-            "verified": verified,
-            "data": target_win,
+            "status": "success" if verified else "failure",
+            "message": "The selected window is focused." if verified else "Window focus could not be verified.",
+            "error": None if verified else "focus_unverified", "verified": verified,
+            "data": {k:target_win[k] for k in ("window_id","process_name","pid","foreground") if k in target_win},
         }
 
     return {
@@ -698,6 +714,7 @@ def launch_app(args: Union[list, dict]) -> Dict[str, Any]:
         return _ACTION_OVERRIDE.launch_app(args)
 
     app_name = ""
+    launch_options = args if isinstance(args,dict) else {}
     if isinstance(args, dict):
         app_name = args.get("app") or args.get("app_name") or ""
     elif isinstance(args, list) and args:
@@ -706,6 +723,7 @@ def launch_app(args: Union[list, dict]) -> Dict[str, Any]:
                 import json
                 parsed = json.loads(args[0])
                 if isinstance(parsed, dict):
+                    launch_options = parsed
                     app_name = parsed.get("app") or parsed.get("app_name") or ""
             except Exception:
                 pass
@@ -758,8 +776,12 @@ def launch_app(args: Union[list, dict]) -> Dict[str, Any]:
     start = time.monotonic()
     matched_window = None
     matched_pid = None
+    candidate_id = None
+    candidate_since = start
+    stable_window = False
 
     while time.monotonic() - start < 5.0:
+        matched_window = None
         win_res = list_windows()
         for w in win_res.get("windows", []):
             w_title = w["title"].lower()
@@ -774,7 +796,16 @@ def launch_app(args: Union[list, dict]) -> Dict[str, Any]:
                 break
 
         if matched_window:
-            break
+            # Startup/splash windows can disappear before the next UI command.
+            # Observe a stable identity without launching the application again.
+            now = time.monotonic()
+            if matched_window["window_id"] != candidate_id:
+                candidate_id, candidate_since = matched_window["window_id"], now
+            elif now - candidate_since >= 1.0:
+                stable_window = True
+                break
+        else:
+            candidate_id = None
 
         # Secondary: check background process
         if exe_name:
@@ -785,11 +816,12 @@ def launch_app(args: Union[list, dict]) -> Dict[str, Any]:
                         break
                 except Exception:
                     pass
-        if matched_pid:
-            break
-
+        # A process can exist before its GUI window is created. Keep observing
+        # until a window appears or the original bounded launch deadline expires.
         time.sleep(0.3)
 
+    if not stable_window:
+        matched_window = None
     if not matched_pid and not matched_window:
         return {
             "status": "failure",
@@ -797,14 +829,26 @@ def launch_app(args: Union[list, dict]) -> Dict[str, Any]:
             "error": "launch_verification_failed",
         }
 
+    foreground_verified = False
+    if matched_window and launch_options.get("activate",True):
+        focused = focus_window({"window_id":matched_window["window_id"]})
+        foreground_verified = bool(focused.get("verified"))
+        if not foreground_verified:
+            return {"status":"failure","error":"focus_unverified",
+                "message":"The application started, but its foreground window was not verified.",
+                "data":{"app_name":display_name,"pid":matched_pid,"window_id":matched_window["window_id"],
+                    "process_started":True,"foreground_verified":False}}
     return {
         "status": "success",
-        "message": f"Opened '{display_name}'",
+        "message": f"Opened '{display_name}'" if matched_window else f"Started '{display_name}'; no visible window was verified.",
         "data": {
             "app_name": display_name,
+            "process_name": matched_window.get("process_name") if matched_window else exe_name or None,
+            "host_pid": matched_window.get("host_pid") if matched_window else None,
             "pid": matched_pid,
             "window_id": matched_window.get("window_id") if matched_window else None,
-            "window_title": matched_window.get("title") if matched_window else None,
+            "foreground_verified": foreground_verified,
+            "verification_scope": "window" if matched_window else "process",
             "verified": True,
         },
     }

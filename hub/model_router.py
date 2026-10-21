@@ -18,31 +18,17 @@ class ModelRouter(ABC):
     async def generate_result(self, user_text: str, context: Dict[str, Any], on_chunk: Optional[callable] = None) -> ModelResult:
         pass
 
-class OpenRouterModelRouter(ModelRouter):
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "openai/gpt-4o-mini"):
-        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
-        self.model_name = model_name
-
-    @property
-    def name(self) -> str:
-        return "openrouter"
-
-    async def generate_result(self, user_text: str, context: Dict[str, Any], on_chunk: Optional[callable] = None) -> ModelResult:
-        # TODO: Implement OpenRouter API call
-        log.warning("OpenRouter is stubbed out. Falling back to Mock.")
-        mock = MockLLMProvider()
-        return await mock.generate_result(user_text, context, on_chunk)
-
 class LocalModelRouter(ModelRouter):
+    def __init__(self):
+        from .local_model import OllamaLLMProvider
+        self.provider = OllamaLLMProvider()
+
     @property
     def name(self) -> str:
         return "local_model"
 
     async def generate_result(self, user_text: str, context: Dict[str, Any], on_chunk: Optional[callable] = None) -> ModelResult:
-        # TODO: Implement Local model API call (e.g., Llama.cpp, Ollama)
-        log.warning("Local model is stubbed out. Falling back to Mock.")
-        mock = MockLLMProvider()
-        return await mock.generate_result(user_text, context, on_chunk)
+        return await self.provider.generate_result(user_text, context, on_chunk)
 
 class ProviderRouterAdapter(ModelRouter):
     def __init__(self, provider):

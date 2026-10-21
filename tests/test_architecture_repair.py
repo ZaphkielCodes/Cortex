@@ -67,21 +67,13 @@ from hub.world_state import Signal, WorldState, WorldStateManager
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_semantic_paraphrases_resolve_to_same_capability():
-    """Verify equivalent phrasing variants resolve to the identical capability without phrase branches."""
-    chrome_variants = [
-        "Open Chrome.",
-        "Launch Chrome.",
-        "Can you bring Chrome up?",
-        "I need Chrome.",
-    ]
-    interp = SemanticInterpreter()
-    ctx = AssembledContext(source_device="asus", available_capabilities=["app.launch"])
-
-    results = [await interp.interpret(InputNormalizer.normalize(v), ctx) for v in chrome_variants]
-    caps = [r.candidate_capabilities[0] for r in results]
-
-    assert all(c == "app.launch" for c in caps), f"Expected all variants to resolve to 'app.launch', got {caps}"
-    assert all(r.target_reference == "chrome" or r.arguments.get("app") == "chrome" for r in results)
+    from model_contract_fixtures import scripted_harness, call
+    for request in ["Open Chrome.", "Launch Chrome.", "Can you bring Chrome up?", "I need Chrome."]:
+        harness, ctrl, model = scripted_harness([call("app.launch", app="chrome")], [{"status":"success","data":{"opened":True}}])
+        result = await harness.process_request("asus", request, {})
+        assert result.status == "success"
+        assert ctrl.execute_and_observe.call_args.args[1:] == ("app.launch", {"app":"chrome", "target_device":"asus"})
+        assert model.calls[0][0] == request  # Wiring, not simulated paraphrase comprehension.
 
 
 # ===========================================================================
@@ -111,26 +103,14 @@ def test_no_special_handler_needed_for_each_paraphrase():
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_target_grounding_happens_after_semantic_interpretation():
-    wsm = WorldStateManager.get_instance()
-    wsm.record_foreground_switch(app_name="Code.exe", window_title="VS Code - Cortex", device_id="asus")
-
-    interp = SemanticInterpreter()
-    ctx = AssembledContext(
-        source_device="asus",
-        foreground_app="Code.exe",
-        active_window="VS Code - Cortex",
-        available_capabilities=["app.close"],
-    )
-
-    # 1. Semantic interpretation outputs abstract reference without inspecting windows
-    intent = await interp.interpret(InputNormalizer.normalize("Close the app I'm using."), ctx)
-    assert intent.candidate_capabilities == ["app.close"]
-    assert intent.target_reference in ("current_app", "Code.exe")
-
-    # 2. Target grounder resolves against live world state
-    grounded = TargetGrounder.ground(intent, ctx)
-    assert grounded.resolved_entity == "Code.exe"
-    assert grounded.target_device == "asus"
+    from model_contract_fixtures import scripted_harness, call
+    harness, ctrl, model = scripted_harness([call("app.close", app="Code.exe")], [{"status":"success","data":{"closed":True}}])
+    context={"world_state":{"foreground_app":"Code.exe"}}
+    result=await harness.process_request("asus", "Close the app I'm using.", context)
+    assert result.status == "success"
+    assert ctrl.execute_and_observe.call_args.args[1:] == ("app.close", {"app":"Code.exe", "target_device":"asus"})
+    state=json.loads(model.calls[0][1]["system_prompt"].split("\nSTATE:\n")[1])
+    assert state["context"]["world_snapshot"]["foreground_app"] == "Code.exe"
 
 
 # ===========================================================================
@@ -257,25 +237,14 @@ async def test_task_orchestrator_rejects_invented_capability():
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_planner_builds_plan_from_capability_schema():
-    """GoalPlanner reasons from registered capability descriptions and schemas, not phrase templates."""
-    planner = GoalPlanner.get_instance()
-
-    canon = CanonicalCapabilityRegistry.get_instance()
-    caps = canon.get_available_capabilities("asus")
-    cap_names = {c.name for c in caps}
-
-    # Verify that planner discovers all capabilities dynamically from registry
-    assert "process.list" in cap_names
-    assert "web.search" in cap_names
-    assert "fs.delete" in cap_names
-
-    # Check reason_from_capabilities logic
-    step = planner._reason_from_capabilities(
-        goal_text="check how much memory processes are taking",
-        available_caps=cap_names,
-    )
-    assert step is not None
-    assert step["capability"] in ("process.list", "telemetry.get_system_usage")
+    from hub.goals import Goal
+    from hub.intent_schema import ModelResult
+    planner=GoalPlanner.get_instance()
+    planner._model_router=type("PlanningModel", (), {"name":"fixture", "locality":"local_device", "generate_result":AsyncMock(return_value=ModelResult(type="PLAN",plan={"steps":[{"capability":"process.list","arguments":{"sort_by":"memory"}}]}))})()
+    caps=[c.to_dict() for c in CanonicalCapabilityRegistry.get_instance().get_available_capabilities("asus")]
+    plan=await planner._generate_plan(Goal(goal_id="probe", title="Inspect processes",original_request="check how much memory processes are taking"),caps,"asus")
+    assert plan["steps"][0]["capability"] == "process.list"
+    assert planner._model_router.generate_result.call_args.args[1]["available_capabilities"] == caps
 
 
 # ===========================================================================
@@ -283,14 +252,12 @@ async def test_planner_builds_plan_from_capability_schema():
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_missing_capability_returns_truthful_limitation():
-    """Truly unsupported tasks report capability limitation truthfully without hallucinating tools."""
-    interp = SemanticInterpreter()
-    ctx = AssembledContext(source_device="asus", available_capabilities=["app.launch", "fs.read"])
-
-    # 3D printing a physical object is unsupported
-    intent = await interp.interpret(InputNormalizer.normalize("Can you 3D print a hinge for my desk?"), ctx)
-    assert intent.missing_capability is not None or "3d print" in intent.response_text.lower()
-    assert "3d print" in intent.response_text.lower() or "hardware" in intent.response_text.lower()
+    from model_contract_fixtures import scripted_harness
+    harness,ctrl,model=scripted_harness([{"decision":"FAIL_TRUTHFULLY","response_text":"Physical fabrication hardware is unavailable."}])
+    result=await harness.process_request("asus","Can you 3D print a hinge for my desk?",{})
+    assert result.status == "unsupported"
+    assert "hardware" in result.message.lower()
+    ctrl.execute_and_observe.assert_not_called()
 
 
 # ===========================================================================
@@ -298,25 +265,13 @@ async def test_missing_capability_returns_truthful_limitation():
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_conversational_followup_uses_prior_context():
-    """Conversational follow-up 'So I'm working on you?' resolves contextually, not as failed action."""
-    interp = SemanticInterpreter()
-
-    # Prior turn grounded Cortex
-    ctx = AssembledContext(
-        source_device="asus",
-        foreground_app="Code.exe",
-        active_window="Cortex - Visual Studio Code",
-        recent_conversation_turns=[
-            {"role": "user", "text": "What app am I currently using?"},
-            {"role": "assistant", "text": "You're currently using VS Code and working on Cortex."},
-        ],
-    )
-
-    intent = await interp.interpret(InputNormalizer.normalize("So I'm working on you?"), ctx)
-    assert intent.type == "CONVERSATION"
-    assert intent.is_conversational_followup is True
-    assert intent.response_text is not None
-    assert "cortex" in intent.response_text.lower() or "yes" in intent.response_text.lower()
+    from model_contract_fixtures import scripted_harness
+    harness,ctrl,model=scripted_harness([{"decision":"RESPOND","response_text":"You're editing Cortex."}])
+    prior=[{"role":"user","text":"What am I using?"},{"role":"assistant","text":"Cortex in Code.exe"}]
+    result=await harness.process_request("asus","So I'm working on you?",{"history":prior})
+    assert result.status == "success"
+    assert model.calls[0][1]["conversation_history"] == prior
+    ctrl.execute_and_observe.assert_not_called()
 
 
 # ===========================================================================
@@ -324,31 +279,13 @@ async def test_conversational_followup_uses_prior_context():
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_previous_window_concept_resolves_from_history():
-    """'Switch apps.' / 'Take me back' grounds previous app from world state foreground history."""
-    wsm = WorldStateManager.get_instance()
-    wsm.record_foreground_switch(app_name="chrome.exe", window_title="Google Chrome - GitHub", device_id="asus")
-    wsm.record_foreground_switch(app_name="slack.exe", window_title="Slack - Team Chat", device_id="asus")
-
-    prev = wsm.get_previous_foreground("asus")
-    assert prev is not None
-    assert prev.get("app_name") == "chrome.exe"
-
-    interp = SemanticInterpreter()
-    ctx = AssembledContext(
-        source_device="asus",
-        foreground_app="slack.exe",
-        active_window="Slack - Team Chat",
-        recent_foreground_history=[{"app_name": "chrome.exe", "window_title": "Google Chrome - GitHub"}],
-        available_capabilities=["window.focus"],
-    )
-
-    intent = await interp.interpret(InputNormalizer.normalize("Switch apps."), ctx)
-    assert intent.candidate_capabilities == ["window.focus"]
-    assert intent.target_reference in ("previous_app", "previous_window")
-
-    # Grounding resolves 'previous_app' to 'chrome.exe'
-    grounded = TargetGrounder.ground(intent, ctx)
-    assert grounded.resolved_entity == "chrome.exe"
+    from model_contract_fixtures import scripted_harness,call
+    harness,ctrl,model=scripted_harness([call("window.focus",app="chrome.exe")],[{"status":"success","data":{"focused":True}}])
+    context={"world_state":{"foreground_app":"slack.exe","previous_app":"chrome.exe"}}
+    result=await harness.process_request("asus","Switch apps.",context)
+    assert result.status == "success"
+    assert ctrl.execute_and_observe.call_args.args[2]["app"] == "chrome.exe"
+    assert "chrome.exe" in model.calls[0][1]["system_prompt"]
 
 
 # ===========================================================================
@@ -356,20 +293,12 @@ async def test_previous_window_concept_resolves_from_history():
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_process_memory_query_distinction():
-    """Cortex distinguishes aggregate memory ('How much RAM am I using?') vs process memory ranking."""
-    interp = SemanticInterpreter()
-    ctx = AssembledContext(source_device="asus", available_capabilities=["process.list", "telemetry.get_system_usage"])
-
-    # 1. Process ranking query -> process.list
-    proc_intent = await interp.interpret(
-        InputNormalizer.normalize("What's taking most of the memory on my laptop right now?"), ctx
-    )
-    assert proc_intent.candidate_capabilities == ["process.list"]
-    assert proc_intent.arguments.get("sort_by") == "memory"
-
-    # 2. Aggregate query -> telemetry.get_system_usage
-    agg_intent = await interp.interpret(InputNormalizer.normalize("How much RAM am I using?"), ctx)
-    assert agg_intent.candidate_capabilities == ["telemetry.get_system_usage"]
+    from model_contract_fixtures import scripted_harness,call
+    for request, decision, raw in [("What's taking most of the memory on my laptop right now?",call("process.list",sort_by="memory"),{"processes":[]}), ("How much RAM am I using?",call("telemetry.get_system_usage"),{"cpu_percent":12,"ram_percent":34})]:
+        harness,ctrl,model=scripted_harness([decision],[{"status":"success","data":raw}])
+        result=await harness.process_request("asus",request,{})
+        assert result.status == "success"
+        assert ctrl.execute_and_observe.call_args.args[1] == decision["capability"]
 
 
 # ===========================================================================
@@ -497,6 +426,8 @@ async def test_a8_transfer_regression(tmp_path):
     dst_file = tmp_path / "worker_dest" / "probe.txt"
     test_file.write_text("Cortex Architecture Repair Phase A8 Transfer Probe")
 
+    from hub.file_transfer import InProcessTransportProvider, TransportSelector
+    ftm.transport_selector = TransportSelector({"lan": InProcessTransportProvider()})
     session = await ftm.initiate_transfer(
         source_device_id="asus",
         destination_device_id="worker_node",

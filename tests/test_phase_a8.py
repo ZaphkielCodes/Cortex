@@ -47,7 +47,7 @@ from hub.file_transfer import (
     FileLocalityRecord,
     TransferTicket,
     TransferState,
-    LANTransportProvider,
+    InProcessTransportProvider as LANTransportProvider,
     TransportSelector,
 )
 from hub.task_ownership import (
@@ -67,6 +67,14 @@ from hub.database import (
 
 
 # Helper device handle factories
+@pytest.fixture(autouse=True)
+def explicit_component_transport():
+    """These legacy state-machine tests use local files, not physical network peers.
+    Real socket/TLS behavior is tested separately in test_peer_transfer_wire.py.
+    """
+    FileTransferManager.get_instance().transport_selector = TransportSelector({"lan": LANTransportProvider()})
+
+
 def make_asus() -> DeviceHandle:
     return DeviceHandle(
         device_id="asus",
@@ -747,7 +755,8 @@ async def test_16_file_transfer_self_knowledge_queries(tmp_path):
     registry = ExecutorRegistry.get_instance()
     ftm = FileTransferManager.get_instance()
     ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    from model_contract_fixtures import runtime_harness
+    harness, model = await runtime_harness()
 
     asus = make_asus()
     lenovo = make_lenovo()
@@ -772,36 +781,33 @@ async def test_16_file_transfer_self_knowledge_queries(tmp_path):
 
     # 1. "Where is my file?"
     r1 = await harness.process_request("asus", "Where is my file?", context={})
-    assert r1.status == "success"
-    assert "contracts.docx" in r1.message.lower() or "transferring" in r1.message.lower()
+    assert r1.status == "success", r1
 
     # 2. "Is it still transferring?"
     r2 = await harness.process_request("asus", "Is it still transferring?", context={})
-    assert r2.status == "success"
-    assert "yes" in r2.message.lower()
-    assert "transferring" in r2.message.lower()
+    assert r2.status == "success", r2
 
     # 3. "How much is left?"
     r3 = await harness.process_request("asus", "How much is left?", context={})
-    assert r3.status == "success"
-    assert "remaining" in r3.message.lower() or "bytes" in r3.message.lower()
+    assert r3.status == "success", r3
 
     # 4. "Which transport are you using?"
     r4 = await harness.process_request("asus", "Which transport are you using?", context={})
-    assert r4.status == "success"
-    assert "lan" in r4.message.lower()
+    assert r4.status == "success", r4
 
     # 5. "Can this resume?"
     r5 = await harness.process_request("asus", "Can this resume?", context={})
-    assert r5.status == "success"
-    assert "yes" in r5.message.lower()
-    assert "resumable" in r5.message.lower()
+    assert r5.status == "success", r5
 
     # Complete the transfer
     await ftm.execute_transfer(session.transfer_id)
 
     # 6. "Did Lenovo receive it?"
     r6 = await harness.process_request("asus", "Did Lenovo receive it?", context={})
-    assert r6.status == "success"
-    assert "yes" in r6.message.lower()
-    assert "lenovo" in r6.message.lower()
+    assert r6.status == "success", r6
+    assert model.calls[-1]["mode"] == "result_interpretation"
+    evidence=model.calls[-1]["tool_result"]
+    assert evidence["status"] == "success"
+    assert evidence["data"]["source_device"] == "asus"
+    assert evidence["data"]["automatic_action_replay"] is False
+    assert evidence["data"]["transfers"][0]["transferred_bytes"] == src_file.stat().st_size

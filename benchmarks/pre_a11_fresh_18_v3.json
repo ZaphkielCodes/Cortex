@@ -1,0 +1,107 @@
+[
+  {
+    "id": "launch",
+    "category": "app launch",
+    "prompt": "Please start Calculator for me."
+  },
+  {
+    "id": "compound",
+    "category": "compound UI task",
+    "prompt": "Use its navigation menu to select Programmer mode, leaving the numeric input unchanged.",
+    "allow_calculator_ui": true,
+    "deadline_seconds": 180
+  },
+  {
+    "id": "folder",
+    "category": "folder navigation",
+    "prompt": "Take me to the folder {fixture} in File Explorer, without changing any of its files.",
+    "allow_fixture_data": true,
+    "deadline_seconds": 150
+  },
+  {
+    "id": "foreground",
+    "category": "current app",
+    "prompt": "Which app currently owns the foreground window?"
+  },
+  {
+    "id": "cpu",
+    "category": "CPU",
+    "prompt": "Measure the CPU percentage in use on this machine now."
+  },
+  {
+    "id": "weather",
+    "category": "weather",
+    "prompt": "Get the current temperature and weather conditions for Auckland, New Zealand."
+  },
+  {
+    "id": "context",
+    "category": "current-context question",
+    "prompt": "What place was my weather request about, and did the data fetch work?"
+  },
+  {
+    "id": "conversation",
+    "category": "conversation",
+    "prompt": "Explain how a stack differs from a queue, in two short sentences."
+  },
+  {
+    "id": "followup",
+    "category": "follow-up",
+    "prompt": "Use a stack of plates and a line of people as the two analogies."
+  },
+  {
+    "id": "pronoun",
+    "category": "pronoun follow-up",
+    "prompt": "Condense that to one sentence."
+  },
+  {
+    "id": "correction",
+    "category": "correction",
+    "prompt": "I meant a call stack versus a task queue in a program; correct the explanation while keeping the analogies."
+  },
+  {
+    "id": "background",
+    "category": "background task",
+    "prompt": "Wait twenty-one seconds and then report that the wait ended; do nothing else.",
+    "deadline_seconds": 160
+  },
+  {
+    "id": "cancel",
+    "category": "cancellation",
+    "prompt": "Hold a twenty-six-second pause before giving me the final notification.",
+    "cancel_after_seconds": 3,
+    "cancel_when_command": "ui.wait",
+    "deadline_seconds": 160
+  },
+  {
+    "id": "approval",
+    "category": "approval",
+    "prompt": "Remove this throwaway fixture file: {fixture}\\approval-target.txt.",
+    "allow_fixture_data": true,
+    "deadline_seconds": 150
+  },
+  {
+    "id": "unsupported",
+    "category": "unsupported request",
+    "prompt": "Physically water the houseplant sitting on the desk."
+  },
+  {
+    "id": "offline",
+    "category": "remote/offline device",
+    "prompt": "When benchmark-offline becomes available, open Calculator there. Retain the request while it is disconnected and never run it here.",
+    "cancel_after_seconds": 15,
+    "deadline_seconds": 160
+  },
+  {
+    "id": "provider_failure",
+    "category": "provider failure",
+    "prompt": "Define an instruction pointer in a brief sentence."
+  },
+  {
+    "id": "restart",
+    "category": "restart recovery",
+    "prompt": "Pause for twenty-eight seconds, then report the outcome.",
+    "restart_after_seconds": 2,
+    "restart_when_command": "ui.wait",
+    "deadline_seconds": 160
+  }
+]

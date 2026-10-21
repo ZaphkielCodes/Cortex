@@ -89,9 +89,15 @@ ROLE_PERMISSIONS: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 
 COMMAND_TIERS: dict[str, int] = {
+    "hub.transfer_file": 2,
+    "transfer.inspect": 1,
+    "transfer.prepare": 2,
+    "transfer.send": 2,
+    "transfer.cancel": 2,
     # Tier 1 — Free rein
     "device.info": 1,
     "device.status": 1,
+    "system.runtime_state": 1,
     "system.identity": 1,
     "system.models": 1,
     "system.list_capabilities": 1,
@@ -255,6 +261,10 @@ class PermissionResult:
 
 def get_command_tier(command: str) -> int:
     """Return the tier for a command (defaults to Tier 3 for unknown commands)."""
+    from .integrations.ecosystem import IntegrationRegistry
+    integration = IntegrationRegistry.get_instance().get(command)
+    if integration:
+        return integration.permission_tier
     return COMMAND_TIERS.get(command, DEFAULT_TIER)
 
 
@@ -307,8 +317,11 @@ async def check_permission(
             )
 
     # --- 2. Capability check (Dynamic) ---
+    from .capability_registry import CanonicalCapabilityRegistry
+    schema = CanonicalCapabilityRegistry.get_instance().get_capability(command)
+    hub_owned = schema is not None and schema.target_type == "hub"
     capabilities = await get_device_capabilities(target_id)
-    if command not in capabilities:
+    if not hub_owned and command not in capabilities:
         return PermissionResult(
             allowed=False,
             needs_confirmation=False,

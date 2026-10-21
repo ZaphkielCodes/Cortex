@@ -208,51 +208,24 @@ def test_capabilities_advertises_screen_and_legacy_aliases():
 
 
 def test_intent_screenshot_mapping_in_agent_harness():
-    """Verify legacy intent_screenshot maps to screen.capture without unsupported intent error."""
-    control = CortexControlLayer({"asus": MagicMock()})
-    harness = AgentHarness(control)
-    
-    assert harness._map_intent_to_capability("intent_screenshot") == "screen.capture"
-    assert harness._map_intent_to_capability("take_screenshot") == "screen.capture"
-    assert harness._map_intent_to_capability("screenshot.read") == "screen.capture"
-    assert harness._map_intent_to_capability("retrieve_recent_screenshot") == "screen.capture"
+    """Obsolete alias promotion is replaced by canonical IDs and rejection of NL aliases."""
+    harness = AgentHarness(CortexControlLayer())
+    for alias in ["intent_screenshot","take_screenshot","retrieve_recent_screenshot"]:
+        assert harness._map_intent_to_capability(alias) == ""
     assert harness._map_intent_to_capability("screen.capture") == "screen.capture"
     assert harness._map_intent_to_capability("screen.analyze") == "screen.analyze"
 
 
+
 @pytest.mark.asyncio
 async def test_intent_screenshot_dispatch_flow():
-    """Verify executing intent_screenshot via harness dispatches properly."""
-    control = CortexControlLayer({"asus": MagicMock()})
-    harness = AgentHarness(control)
-    control.execute_command = AsyncMock()
-    
-    await database.update_device_capabilities("asus", "windows", ["screen.capture"])
-    
-    with patch.object(control, "validate_target_and_capability", return_value={"valid": True, "target": "asus"}), \
-         patch.object(control, "check_permissions", return_value=MagicMock(allowed=True, needs_confirmation=False, tier=1)):
-        with patch.object(harness.router, "generate_result", return_value=ModelResult(
-            type="ACTION",
-            action_plan=ActionPlan(
-                intent="intent_screenshot",
-                source_device="asus",
-                target_device_reference=None,
-                capability="screen.capture",
-                action="screen.capture",
-                arguments={},
-                requires_confirmation=False,
-                confidence=0.95,
-                user_facing_summary="taking a screenshot",
-            ),
-        )):
-            res = await harness.process_request(
-                "asus",
-                "take a screenshot",
-                {"device": {"capabilities": ["screen.capture"]}},
-                None,
-            )
-            assert res.status == "success", f"res was {res.status} with message: {res.message}"
-            assert "intent_screenshot is not supported" not in res.message.lower()
+    """An explicit canonical decision dispatches capture once and preserves its reference."""
+    harness, ctrl, model = scripted_harness([call("screen.capture")], [{"status":"success","data":{"image_ref":"fixture.png"}}])
+    resp = await harness.process_request("asus", "take a screenshot", {})
+    assert resp.status == "success" and resp.data["image_ref"] == "fixture.png"
+    assert ctrl.execute_and_observe.await_args.args[1] == "screen.capture"
+    assert ctrl.execute_and_observe.await_count == 1
+
 
 
 # ===========================================================================
@@ -260,84 +233,32 @@ async def test_intent_screenshot_dispatch_flow():
 # ===========================================================================
 
 @pytest.mark.asyncio
-async def test_direct_conversational_screen_query():
-    """
-    User: 'What's on my screen?'
-    Verifies:
-    - Real screen capture dispatched
-    - Vision provider called
-    - Response grounded in visual observation
-    - No unsupported intent error
-    """
-    mock_p = MockVisionProvider(
-        summary="A web browser showing GitHub repository Cortex with open pull requests.",
-        visible_apps=["Chrome", "GitHub"],
-        visible_text_fragments=["Cortex", "Pull Requests", "Phase A2"],
-        confidence=0.98,
-    )
-    set_vision_provider_override(mock_p)
-    
-    control = CortexControlLayer({"asus": MagicMock()})
-    harness = AgentHarness(control)
-    
-    async def mock_exec_obs(dev_id, cap, args=None, **kwargs):
-        if cap == "screen.capture":
-            return {
-                "status": "success",
-                "data": {"image_ref": "test_screen.png", "width": 1920, "height": 1080},
-            }
-        return {"status": "success", "message": "done"}
-    
-    control.execute_and_observe = AsyncMock(side_effect=mock_exec_obs)
-    
-    result = await harness.process_request(
-        "asus",
-        "What's on my screen?",
-        {"device": {"capabilities": ["screen.capture"]}},
-        None,
-    )
-    
-    assert result.status == "success"
-    assert "GitHub" in result.message or "Chrome" in result.message
-    assert "pull requests" in result.message.lower()
+async def test_direct_conversational_screen_query(monkeypatch):
+    """Actual analysis provider boundary receives the explicit image and question."""
+    provider = MockVisionProvider(summary="A browser showing GitHub Cortex pull requests.",visible_apps=["Chrome"],confidence=.98)
+    provider.locality = "local_device"
+    set_vision_provider_override(provider)
+    provider.analyze_image = AsyncMock(wraps=provider.analyze_image)
+    harness, _ = await native_harness(monkeypatch, EvidenceModel("screen.analyze",{"image_ref":"fixture.png","question":"What's on my screen?"}))
+    resp = await harness.process_request("asus", "What's on my screen?", {})
+    assert resp.status == "success" and "GitHub" in resp.message
+    assert "pull requests" in resp.message
+    assert provider.analyze_image.await_args.kwargs["image_ref"] == "fixture.png"
+
 
 
 @pytest.mark.asyncio
-async def test_direct_conversational_error_inspection():
-    """
-    User: 'What error is showing on my screen?'
-    Verifies error interpretation from visible content.
-    """
-    mock_p = MockVisionProvider(
-        summary="Dialog box showing: 'Connection refused: Failed to connect to server on port 8000.'",
-        visible_apps=["Error Dialog", "Terminal"],
-        visible_text_fragments=["Connection refused", "port 8000"],
-        confidence=0.95,
-    )
-    set_vision_provider_override(mock_p)
-    
-    control = CortexControlLayer({"asus": MagicMock()})
-    harness = AgentHarness(control)
-    
-    async def mock_exec_obs(dev_id, cap, args=None, **kwargs):
-        if cap == "screen.capture":
-            return {
-                "status": "success",
-                "data": {"image_ref": "err_screen.png", "width": 1920, "height": 1080},
-            }
-        return {"status": "success", "message": "done"}
-    
-    control.execute_and_observe = AsyncMock(side_effect=mock_exec_obs)
-    
-    result = await harness.process_request(
-        "asus",
-        "What error is showing on my screen?",
-        {"device": {"capabilities": ["screen.capture"]}},
-        None,
-    )
-    
-    assert result.status == "success"
-    assert "Connection refused" in result.message or "port 8000" in result.message
+async def test_direct_conversational_error_inspection(monkeypatch):
+    """Visible errors reach interpretation as evidence, not guessed foreground state."""
+    provider = MockVisionProvider(summary="Connection refused on port 8000.",visible_text_fragments=["Connection refused","8000"])
+    provider.locality = "local_device"
+    set_vision_provider_override(provider)
+    harness, _ = await native_harness(monkeypatch, EvidenceModel("screen.analyze",{"image_ref":"error.png","question":"What error?"}))
+    resp = await harness.process_request("asus", "What error is showing?", {})
+    assert resp.status == "success"
+    assert "Connection refused" in resp.message and "8000" in resp.message
+    assert resp.data["source_image_reference"] == "error.png"
+
 
 
 # ===========================================================================
@@ -415,7 +336,8 @@ async def test_planner_screen_inspection_goal():
     No invented magic capabilities.
     """
     gm = GoalManager.get_instance()
-    planner = GoalPlanner.get_instance(goal_manager=gm)
+    from model_contract_fixtures import PlanModel, plan_step
+    planner = GoalPlanner.get_instance(goal_manager=gm, model_router=PlanModel([plan_step("screen.capture"),plan_step("screen.analyze",image_ref="fixture.png",question="Why did this app fail?")]))
     
     mock_p = MockVisionProvider(summary="App failure screen")
     set_vision_provider_override(mock_p)
@@ -435,6 +357,7 @@ async def test_planner_screen_inspection_goal():
     assert "question" in steps[1]["arguments"]
 
 
+
 # ===========================================================================
 # 8. POST-ACTION VISUAL VERIFICATION TESTS
 # ===========================================================================
@@ -449,7 +372,8 @@ async def test_planner_visual_verification_goal():
     3. screen.analyze
     """
     gm = GoalManager.get_instance()
-    planner = GoalPlanner.get_instance(goal_manager=gm)
+    from model_contract_fixtures import PlanModel, plan_step
+    planner = GoalPlanner.get_instance(goal_manager=gm, model_router=PlanModel([plan_step("browser.open_url",url="https://www.youtube.com"),plan_step("screen.capture"),plan_step("screen.analyze",image_ref="fixture.png",question="Is YouTube visible?")]))
     
     mock_p = MockVisionProvider(summary="YouTube visibly open")
     set_vision_provider_override(mock_p)
@@ -470,50 +394,29 @@ async def test_planner_visual_verification_goal():
     assert steps[2]["capability"] == "screen.analyze"
 
 
+
 @pytest.mark.asyncio
 async def test_conversational_visual_verification_flow():
-    """
-    Conversational request: 'Open YouTube and check that it opened.'
-    Verifies:
-    - browser.open_url dispatched
-    - screen.capture dispatched
-    - screen.analyze confirms visible YouTube page
-    """
-    mock_p = MockVisionProvider(
-        summary="A web browser opened displaying the YouTube homepage with video recommendations.",
-        visible_apps=["Google Chrome", "YouTube"],
-        confidence=0.97,
-    )
-    set_vision_provider_override(mock_p)
-    
-    control = CortexControlLayer({"asus": MagicMock()})
-    harness = AgentHarness(control)
-    
-    executed_caps = []
-    async def mock_exec(dev_id, cap, args=None, **kwargs):
-        executed_caps.append(cap)
-        if cap == "screen.capture":
-            return {"status": "success", "data": {"image_ref": "yt_screen.png", "width": 1920, "height": 1080}}
-        if cap == "screen.analyze":
-            obs = await mock_p.analyze_image("yt_screen.png", question="Is YouTube visibly open?")
-            return {"status": "success", "data": obs.to_dict()}
-        return {"status": "success", "message": "ok"}
-        
-    control.execute_and_observe = AsyncMock(side_effect=mock_exec)
-    
-    res = await harness.process_request(
-        "asus",
-        "Open YouTube and check that it opened.",
-        {"device": {"capabilities": ["browser.open_url", "screen.capture"]}},
-        None,
-    )
-    
-    assert res.status == "success"
-    assert "browser.open_url" in executed_caps
-    assert "screen.capture" in executed_caps
-    assert "screen.analyze" in executed_caps
-    assert "youtube" in res.message.lower()
-    assert "verified" in res.message.lower()
+    """Verification requires a second observation after the launch, with retained image ID."""
+    provider = MockVisionProvider(summary="YouTube visibly open")
+    provider.locality = "local_device"
+    set_vision_provider_override(provider)
+    harness, ctrl, model = scripted_harness([
+        dict(call("browser.open_url",url="https://www.youtube.com"),continue_after_result=True,
+             success_condition=[{"source":"capability","capability":"screen.analyze","path":["data","summary"],
+                                 "operator":"equals","value":"YouTube is visibly open"}]),
+        dict(call("screen.capture"),continue_after_result=True),
+        call("screen.analyze",image_ref="yt_screen.png",question="Is YouTube open?"),
+        {"decision":"RESPOND","response_text":"YouTube is verified open."}],
+        [{"status":"success","data":{"opened":True}},
+         {"status":"success","data":{"image_ref":"yt_screen.png"}},
+         {"status":"success","data":{"summary":"YouTube is visibly open","source_image_reference":"yt_screen.png"}}],answer="YouTube is verified open.")
+    res = await harness.process_request("asus", "Open YouTube and check that it opened.", {})
+    assert res.status == "success" and "verified" in res.message
+    assert [c.args[1] for c in ctrl.execute_and_observe.await_args_list] == ["browser.open_url","screen.capture","screen.analyze"]
+    assert ctrl.execute_and_observe.await_args.args[2]["image_ref"] == "yt_screen.png"
+    assert "yt_screen.png" in model.calls[2][1]["system_prompt"]
+
 
 
 # ===========================================================================
@@ -537,35 +440,19 @@ async def test_screen_analyze_fails_when_provider_unavailable():
 
 
 @pytest.mark.asyncio
-async def test_conversational_fails_when_provider_unavailable_no_fabrication():
-    """
-    When vision provider is unavailable, conversational screen question must report:
-    'screen analysis provider unavailable'
-    and NOT fabricate or guess visual state from foreground apps or model memory.
-    """
-    unavail_p = MockVisionProvider(is_available=False)
-    set_vision_provider_override(unavail_p)
-    
-    control = CortexControlLayer({"asus": MagicMock()})
-    harness = AgentHarness(control)
-    
-    control.execute_and_observe = AsyncMock(return_value={
-        "status": "success",
-        "data": {"image_ref": "mock.png", "width": 1920, "height": 1080},
-    })
-    
-    res = await harness.process_request(
-        "asus",
-        "What's on my screen?",
-        {"device": {"capabilities": ["screen.capture"]}},
-        None,
-    )
-    
-    assert res.status == "error"
-    assert "screen analysis provider unavailable" in res.message.lower()
-    # Ensure it didn't fabricate a fake answer
-    assert "chrome" not in res.message.lower()
-    assert "youtube" not in res.message.lower()
+async def test_conversational_fails_when_provider_unavailable_no_fabrication(monkeypatch):
+    """An unavailable vision capability must stop without fabricating visible contents."""
+    provider = MockVisionProvider(is_available=False)
+    provider.locality = "local_device"
+    set_vision_provider_override(provider)
+    harness, ctrl = await native_harness(monkeypatch, EvidenceModel("screen.analyze",{"image_ref":"fixture.png"}))
+    ctrl.execute_and_observe = AsyncMock(wraps=ctrl.execute_and_observe)
+    resp = await harness.process_request("asus", "What's on my screen?", {})
+    assert resp.status in {"unsupported","error"}
+    assert "Chrome" not in resp.message and "YouTube" not in resp.message
+    assert "unavailable" in resp.message.lower()
+    assert "summary" not in (resp.data or {})
+
 
 
 # ===========================================================================
@@ -610,3 +497,5 @@ def test_production_db_isolation():
     """Verify that during Phase A2 testing, the test database is completely isolated."""
     assert database.DB_PATH.name == "test_cortex.db"
     assert "data/cortex.db" not in str(database.DB_PATH).replace("\\", "/")
+
+from model_contract_fixtures import native_harness, EvidenceModel, scripted_harness, call

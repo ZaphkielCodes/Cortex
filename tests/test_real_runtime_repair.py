@@ -23,7 +23,7 @@ import pytest_asyncio
 
 from agent.executor import execute, normalize_command_arguments
 from agent.desktop_actions import close_app, launch_app
-from hub.agent_harness import AgentHarness, extract_weather_location, sanitize_for_speech
+from hub.agent_harness import AgentHarness, sanitize_for_speech
 from hub.control_layer import CortexControlLayer
 from hub.database import init_db, enroll_device, add_integration, update_connection_state
 from hub.intent_schema import ConversationalResponse, ActionPlan
@@ -89,8 +89,8 @@ async def setup_test_env():
     SessionContextManager._memory_cache.clear()
 
     # Enroll test devices
-    await enroll_device("asus", "asus", "primary", "hash1")
-    await enroll_device("test_dev", "Test Device", "worker", "hash2")
+    await enroll_device("asus", "asus", "admin", "hash1")
+    await enroll_device("test_dev", "Test Device", "sub_admin", "hash2")
 
     # Set up mock providers
     w_prov = DummyWeatherProvider()
@@ -155,202 +155,114 @@ async def test_canonical_command_argument_serialization(setup_test_env):
 # Test 2: Screenshot Follow-Up Continuity
 # ===========================================================================
 @pytest.mark.asyncio
-async def test_screenshot_followup_continuity(setup_test_env):
-    """
-    Test 2:
-    'Take a screenshot.' -> succeeds, records reference.
-    'Read that screenshot and tell me what you see.' -> reuses existing screenshot reference + screen.analyze.
-    Must NOT invent capability.
-    If no screenshot exists, explains that there is no recent screenshot.
-    """
-    control = CortexControlLayer()
-    harness = AgentHarness(control)
+async def test_screenshot_followup_continuity(setup_test_env,monkeypatch):
+    """A captured reference survives two follow-ups; absent references require clarification."""
+    from model_contract_fixtures import native_harness, SequenceEvidenceModel, call
+    from hub.vision_provider import get_vision_provider
+    get_vision_provider().locality="local_device"
+    model=SequenceEvidenceModel([call("screen.capture"),
+        call("screen.analyze",image_ref="shot1.png"),call("screen.analyze",image_ref="shot1.png"),
+        {"decision":"ASK_CLARIFICATION","response_text":"Which screenshot should I inspect?"}])
+    harness,ctrl=await native_harness(monkeypatch,model)
+    original=ctrl.execute_and_observe
+    async def dispatch(device,cap,args,**kwargs):
+        if cap=="screen.capture":return {"status":"success","data":{"image_ref":"shot1.png"}}
+        return await original(device,cap,args,**kwargs)
+    ctrl.execute_and_observe=AsyncMock(side_effect=dispatch)
+    first=await harness.process_request("asus","Take a screenshot.",{})
+    assert first.status=="success" and first.data["image_ref"]=="shot1.png"
+    await SessionContextManager.update_session("asus","Take a screenshot.",first.model_dump())
+    for request in ["Read that screenshot and tell me what you see.","what do you see there?"]:
+        sess=await SessionContextManager.get_session("asus")
+        resp=await harness.process_request("asus",request,{"session":sess})
+        assert resp.status=="success" and resp.data["source_image_reference"]=="shot1.png"
+        assert "Chrome" in resp.message
+    assert "shot1.png" in model.calls[2]["system_prompt"]
+    empty=await harness.process_request("asus","Read that screenshot.",{"session":{"references":{}}})
+    assert empty.status=="clarification_needed"
+    assert [c.args[1] for c in ctrl.execute_and_observe.await_args_list]==["screen.capture","screen.analyze","screen.analyze"]
 
-    # 1. Take a screenshot
-    control.execute_command = AsyncMock()
-    with patch.object(control, "validate_target_and_capability", return_value={"valid": True, "target": "asus"}), \
-         patch.object(control, "check_permissions", return_value=MagicMock(allowed=True, needs_confirmation=False, tier=1)):
-        resp1 = await harness.process_request("asus", "Take a screenshot.", context={"device": {"capabilities": ["screen.capture"]}})
-        assert resp1.status == "success"
-        assert resp1.action_plan.action == "screen.capture"
-
-    # Simulate executor returning screenshot path and updating session
-    await SessionContextManager.set_screenshot_ref("asus", "c:/screenshots/shot1.png")
-    sess = await SessionContextManager.get_session("asus")
-    assert sess["references"].get("last_screenshot_ref") == "c:/screenshots/shot1.png"
-
-    context = {"session": sess}
-    resp2 = await harness.process_request("asus", "Read that screenshot and tell me what you see.", context=context)
-    assert resp2.status == "success"
-    assert "Google Chrome" in resp2.message or "dashboard" in resp2.message.lower()
-
-    # 3. Follow-up: "what do you see there?"
-    resp3 = await harness.process_request("asus", "what do you see there?", context=context)
-    assert resp3.status == "success"
-    assert "Google Chrome" in resp3.message or "dashboard" in resp3.message.lower()
-
-    # 4. If no screenshot exists in session, explain gracefully
-    ScreenPerceptionManager.reset()
-    empty_sess = {"references": {}}
-    resp_empty = await harness.process_request("asus", "Read that screenshot.", context={"session": empty_sess})
-    assert resp_empty.status == "error"
-    assert "no recent screenshot to inspect" in resp_empty.message.lower()
 
 
 # ===========================================================================
 # Test 3: Follow-Up Action Continuity
 # ===========================================================================
 @pytest.mark.asyncio
-async def test_followup_action_continuity(setup_test_env):
-    """
-    Test 3:
-    User: 'Can you check the weather?'
-    Cortex: 'Yes, I can check live weather conditions and forecasts.'
-    User: 'Okay, do it.'
-    Must continue weather intent. If location absent, ask for location. Must NEVER take screenshot.
-    Then when user provides location, completes weather.
-    """
-    control = CortexControlLayer()
-    harness = AgentHarness(control)
+async def test_followup_action_continuity(setup_test_env,monkeypatch):
+    """History bridges offer, missing-location clarification and exact tool execution."""
+    from model_contract_fixtures import native_harness, SequenceEvidenceModel, call
+    from hub.weather_provider import MockWeatherProvider
+    set_weather_provider_override(MockWeatherProvider())
+    model=SequenceEvidenceModel([
+        {"decision":"RESPOND","response_text":"I can check live weather if you give me a location."},
+        {"decision":"ASK_CLARIFICATION","response_text":"Which location?"},
+        call("weather.current",location="Manassas")])
+    harness,ctrl=await native_harness(monkeypatch,model)
+    ctrl.execute_and_observe=AsyncMock(wraps=ctrl.execute_and_observe)
+    for index,request in enumerate(["Can you check the weather?","Okay, do it.","Manassas"]):
+        context={"session":await SessionContextManager.get_session("asus")}
+        resp=await harness.process_request("asus",request,context)
+        if index==1:
+            assert resp.status=="clarification_needed"
+            assert ctrl.execute_and_observe.await_count==0
+            assert "Can you check the weather?" in str(model.calls[-1]["conversation_history"])
+        await SessionContextManager.update_session("asus",request,resp.model_dump())
+    assert resp.status=="success" and resp.data["temperature"]==22.0
+    assert "Manassas" in resp.data["location"]
+    assert [c.args[1] for c in ctrl.execute_and_observe.await_args_list]==["weather.current"]
+    assert ctrl.execute_and_observe.await_args.args[2]["location"]=="Manassas"
 
-    # Turn 1: "Can you check the weather?"
-    sess = await SessionContextManager.get_session("asus")
-    context = {"session": sess}
-    resp1 = await harness.process_request("asus", "Can you check the weather?", context=context)
-    assert resp1.status == "success"
-    assert "Yes, I can check live weather" in resp1.message
-
-    # Verify pending_action is recorded in session
-    sess = await SessionContextManager.get_session("asus")
-    pending = sess["references"].get("pending_action")
-    assert pending is not None
-    assert pending["capability"] == "weather.current"
-    assert "location" in pending["missing_arguments"]
-
-    # Turn 2: "Okay, do it."
-    # Since location is absent from context, it must ask for location and NEVER take screenshot
-    context = {"session": sess}
-    resp2 = await harness.process_request("asus", "Okay, do it.", context=context)
-    assert resp2.status == "clarification_needed"
-    assert "location" in resp2.message.lower()
-    # Must NOT take screenshot!
-    assert "screenshot" not in resp2.message.lower()
-
-    # Turn 3: "Manassas"
-    # Fulfills missing location argument and resumes weather.current
-    sess = await SessionContextManager.get_session("asus")
-    context = {"session": sess}
-    resp3 = await harness.process_request("asus", "Manassas", context=context)
-    assert resp3.status == "success"
-    assert "Manassas" in resp3.message
-    assert "22.0°C" in resp3.message
-
-    # Pending action should be cleared after execution
-    sess = await SessionContextManager.get_session("asus")
-    assert sess["references"].get("pending_action") is None
 
 
 # ===========================================================================
 # Test 4: Weather Location Semantic Extraction
 # ===========================================================================
+def test_weather_wording_and_locations_reach_the_model_unchanged():
+    from hub.pipeline.normalizer import InputNormalizer
+    for text in ["Weather near São Paulo rn?", "Forecast for somewhere I mentioned earlier", "Don't open Weather"]:
+        assert InputNormalizer.normalize(text).raw_text == text
+
+
 @pytest.mark.asyncio
-async def test_weather_location_extraction(setup_test_env):
-    """
-    Test 4:
-    Separate semantic modifiers from location entities.
-    'search up the weather in Manassas currently' -> 'Manassas'
-    'current weather in Manassas' -> 'Manassas'
-    'weather right now in Fairfax' -> 'Fairfax'
-    'what's it like in New York right now' -> 'New York'
-    """
-    assert extract_weather_location("search up the weather in Manassas currently") == "Manassas"
-    assert extract_weather_location("current weather in Manassas") == "Manassas"
-    assert extract_weather_location("weather right now in Fairfax") == "Fairfax"
-    assert extract_weather_location("what's it like in New York right now") == "New York"
-    assert extract_weather_location("weather in Manassas currently") == "Manassas"
-    assert extract_weather_location("what is the weather today") is None
+async def test_compound_self_knowledge_and_followup(setup_test_env,monkeypatch):
+    """Independent integration facts and prior context survive follow-up queries."""
+    from model_contract_fixtures import native_harness, SequenceEvidenceModel, call
+    reg=SystemRegistry.get_instance()
+    reg.set_integration_override("calendar",{"connected":True})
+    reg.set_integration_override("gmail",{"connected":False})
+    model=SequenceEvidenceModel([call("system.list_integrations"),
+        call("system.integration_status",integration="gmail"),
+        {"decision":"CALL_CAPABILITY","capability":"system.capability_status","arguments":{"capability":"web.search,screen.analyze"}}])
+    harness,ctrl=await native_harness(monkeypatch,model)
+    first=await harness.process_request("asus","Do you have access to my calendar and Gmail?",{})
+    assert first.status=="success"
+    rows={r["key"]:r for r in first.data["result"]}
+    assert rows["calendar"]["connected"] is True and rows["gmail"]["connected"] is False
+    await SessionContextManager.update_session("asus","Do you have access to my calendar and Gmail?",first.model_dump())
+    second=await harness.process_request("asus","What about Gmail?",{"session":await SessionContextManager.get_session("asus")})
+    assert second.status=="success" and second.data["connected"] is False
+    assert "calendar and Gmail" in str(model.calls[2]["conversation_history"])
+    third=await harness.process_request("asus","Can you search the web and see my screen?",{})
+    assert third.status=="success"
+    assert set(third.data["capabilities"])=={"web.search","screen.analyze"}
 
-    # End-to-end harness test
-    control = CortexControlLayer()
-    harness = AgentHarness(control)
-    resp = await harness.process_request("asus", "search up the weather in Manassas currently", context={})
-    assert resp.status == "success"
-    assert "Manassas" in resp.message
-    assert "Currently" not in resp.message.split("in ")[1].split(".")[0]
-
-
-# ===========================================================================
-# Test 5: Compound Self-Knowledge & Follow-Up References
-# ===========================================================================
-@pytest.mark.asyncio
-async def test_compound_self_knowledge_and_followup(setup_test_env):
-    """
-    Test 5:
-    'Do you have access to my Calendar and Gmail?'
-    Must report both independently.
-    Then:
-    'What about Gmail?'
-    must remain in system integration context.
-    """
-    control = CortexControlLayer()
-    harness = AgentHarness(control)
-
-    # Pre-configure Calendar as connected, Gmail as unconnected
-    sys_reg = SystemRegistry.get_instance()
-    sys_reg.set_integration_override("calendar", {"connected": True})
-    sys_reg.set_integration_override("gmail", {"connected": False})
-
-    sess = await SessionContextManager.get_session("asus")
-    context = {"session": sess}
-
-    # Compound query
-    resp1 = await harness.process_request("asus", "Do you have access to my calendar and Gmail?", context=context)
-    assert resp1.status == "success"
-    assert "Google Calendar is connected and authorized" in resp1.message
-    assert "Gmail is not currently connected" in resp1.message
-
-    # Follow-up: "What about Gmail?"
-    sess = await SessionContextManager.get_session("asus")
-    context = {"session": sess}
-    resp2 = await harness.process_request("asus", "What about Gmail?", context=context)
-    assert resp2.status in ("success", "error")
-    # Must report Gmail integration status, NOT generic LLM definition of Gmail!
-    assert "Gmail is not currently connected" in resp2.message or "Gmail is connected" in resp2.message
-    assert "email service by google" not in resp2.message.lower()
-
-    # Compound capability test: "Can you search the web and see my screen?"
-    resp3 = await harness.process_request("asus", "Can you search the web and see my screen?", context=context)
-    assert resp3.status == "success"
-    assert "search the web" in resp3.message
-    assert "screen" in resp3.message
 
 
 # ===========================================================================
 # Test 6: Device State Online Verification (No Contamination)
 # ===========================================================================
 @pytest.mark.asyncio
-async def test_device_online_state_verification(setup_test_env):
-    """
-    Test 6:
-    'What devices are connected right now?'
-    Only genuinely live authenticated devices in CONNECTED_DEVICES may report online=true.
-    'test_dev' is enrolled in DB, but not connected via active websocket -> MUST be offline.
-    """
-    control = CortexControlLayer()
-    harness = AgentHarness(control)
+async def test_device_online_state_verification(setup_test_env,monkeypatch):
+    """Enrolled offline devices remain offline; a model sees authenticated live state."""
+    from model_contract_fixtures import native_harness, EvidenceModel
+    harness,ctrl=await native_harness(monkeypatch,EvidenceModel("system.list_devices"))
+    resp=await harness.process_request("asus","What devices are connected right now?",{})
+    assert resp.status=="success"
+    devices={r["device_id"]:r for r in resp.data["result"]}
+    assert devices["asus"]["online"] is True
+    assert devices["test_dev"]["online"] is False
+    assert set(devices)=={"asus","test_dev"}
 
-    # Mock 'asus' as active in CONNECTED_DEVICES, but NOT 'test_dev'
-    from hub.main import CONNECTED_DEVICES
-    CONNECTED_DEVICES.clear()
-    CONNECTED_DEVICES["asus"] = MagicMock()
-
-    resp = await harness.process_request("asus", "What devices are connected right now?", context={})
-    assert resp.status == "success"
-    # asus is online
-    assert "asus (online" in resp.message
-    # test_dev is offline
-    assert "Test Device (offline" in resp.message
-    assert "Connected devices (1 online)" in resp.message
 
 
 # ===========================================================================

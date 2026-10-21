@@ -1,0 +1,19 @@
+services:
+  hub:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    # Bind only to the host loopback. Access through a private VPN/TLS tunnel.
+    ports: ["127.0.0.1:8000:8000"]
+    volumes: ["cortex-state:/state"]
+    environment:
+      CORTEX_HUB_DEVICE_ID: coordinator
+      CORTEX_HOST_LOCALITY: cloud_worker
+      CORTEX_LLM_PROVIDER: ${CORTEX_LLM_PROVIDER:-direct}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      CORTEX_ENABLE_NVIDIA_TRIAL: ${CORTEX_ENABLE_NVIDIA_TRIAL:-0}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+volumes:
+  cortex-state:

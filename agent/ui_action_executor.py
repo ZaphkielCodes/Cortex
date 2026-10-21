@@ -192,8 +192,7 @@ class UIActionExecutor:
         Rejects stale observations if the interface materially changed.
         """
         if not observation_id:
-            # If no observation_id provided, execution proceeds without fencing guarantee
-            return True, None
+            return False, "observation_required"
 
         observer = UIObserver.get_instance()
         is_fresh, reason = observer.is_observation_fresh(observation_id, target_window_id)
@@ -213,14 +212,12 @@ class UIActionExecutor:
         if observation_id:
             obs = observer.get_observation(observation_id)
         if not obs:
-            obs = observer.get_latest_observation()
+            return GroundingResult(success=False, explanation="Explicit observation is unavailable"), None
 
-        if not obs:
-            # Synchronously create an observation if none exists
-            from .ui_observer import observe_ui_sync
-            obs = observe_ui_sync()
-
-        grounding = UIElementGrounder.ground(target, obs, coords=coords)
+        selector = {"target":target}
+        if coords:
+            selector.update(x=coords[0], y=coords[1])
+        grounding = UIElementGrounder.ground_atomic(selector, obs)
         return grounding, obs
 
     def _send_mouse_event(self, flags: int, data: int = 0) -> None:
@@ -276,7 +273,7 @@ class UIActionExecutor:
 
         norm_args = args if isinstance(args, dict) else {}
         target_device = norm_args.get("target_device") or norm_args.get("device_id") or "asus"
-        include_tree = bool(norm_args.get("include_tree", True))
+        include_tree = bool(norm_args.get("include_tree", False))
         include_vision = bool(norm_args.get("include_vision", False))
         target_win = norm_args.get("target_window_id") or norm_args.get("window_id")
         mode = norm_args.get("mode", "full")
@@ -288,6 +285,10 @@ class UIActionExecutor:
             include_vision=include_vision,
             target_window_id=target_win,
         )
+        if target_win is not None and obs.window_id != target_win:
+            return {"status": "failure", "error": "window_not_found",
+                    "message": "The requested window no longer exists; refresh its identity before observing.",
+                    "data": {"requested_window_id": target_win, "input_attempted": False}}
         return {
             "status": "success",
             "message": obs.summary,
@@ -351,13 +352,17 @@ class UIActionExecutor:
         gx, gy = grounding.target_point
         matched_el = grounding.element
 
-        # 3. Focus verification & foreground attachment if window is specified
-        if obs and obs.window_id:
-            try:
-                ctypes.windll.user32.SetForegroundWindow(obs.window_id)
-                time.sleep(0.05)
-            except Exception:
-                pass
+        # Recheck the exact control and foreground before sending any physical input.
+        observer = UIObserver.get_instance()
+        if matched_el and not observer.element_is_current(obs, matched_el):
+            return UIActionResult(status="failure", action=action_name, observation_id=obs_id,
+                error="stale_observation", message="The observed control moved or disappeared; observe again.",
+                verification_required=False, data={"input_attempted":False}).to_dict()
+        if obs and obs.window_id and platform.system() == "Windows":
+            if ctypes.windll.user32.GetForegroundWindow() != obs.window_id:
+                return UIActionResult(status="failure", action=action_name, observation_id=obs_id,
+                    error="focus_unverified", message="Foreground changed before input; observe again.",
+                    verification_required=False, data={"input_attempted":False}).to_dict()
 
         # 4. Perform bounded OS cursor move & click, or UIA invocation fallback if off-screen
         if gx > 0 and gy > 0:
@@ -444,6 +449,10 @@ class UIActionExecutor:
         obs_id = norm.get("observation_id")
         coords = (int(norm["x"]), int(norm["y"])) if ("x" in norm and "y" in norm) else None
 
+        fresh, reason = self._check_fencing(obs_id)
+        if not fresh:
+            return UIActionResult(status="failure",action="ui.move_pointer",error="stale_observation",
+                message="Observe before moving the pointer.",verification_required=False,data={"input_attempted":False}).to_dict()
         grounding, obs = self._resolve_target(target, obs_id, coords=coords)
         if not grounding.success or not grounding.target_point:
             return UIActionResult(
@@ -483,12 +492,21 @@ class UIActionExecutor:
         target = norm.get("target")
         obs_id = norm.get("observation_id")
 
+        def reject(code):
+            return UIActionResult(status="failure", action="ui.scroll", error=code,
+                message="Observe and uniquely ground the current scroll target before scrolling.",
+                observation_id=obs_id, data={"input_attempted":False}).to_dict()
+        if not self._check_fencing(obs_id)[0]:
+            return reject("stale_observation")
         coords = (int(norm["x"]), int(norm["y"])) if ("x" in norm and "y" in norm) else None
         if target or coords:
             grounding, obs = self._resolve_target(target, obs_id, coords=coords)
-            if grounding.success and grounding.target_point:
-                self._move_cursor(*grounding.target_point)
-                time.sleep(0.05)
+            if not grounding.success or not grounding.target_point:
+                return reject("target_not_found")
+            if not UIObserver.get_instance().element_is_current(obs, grounding.element):
+                return reject("stale_observation")
+            self._move_cursor(*grounding.target_point)
+            time.sleep(0.05)
 
         # Delta calculation (positive = up/forward, negative = down/backward)
         wheel_delta = amount if direction == "up" else -amount
@@ -712,25 +730,24 @@ class UIActionExecutor:
         from_target = norm.get("from_target")
         to_target = norm.get("to_target")
         obs_id = norm.get("observation_id")
+        fresh, reason = self._check_fencing(obs_id)
+        if not fresh:
+            return UIActionResult(status="failure",action="ui.drag",observation_id=obs_id,error="stale_observation",
+                message="Observe both drag endpoints again.",verification_required=False,data={"input_attempted":False}).to_dict()
 
-        if from_target or to_target:
-            if from_target:
-                g_from, _ = self._resolve_target(from_target, obs_id)
-                if g_from.success and g_from.target_point:
-                    from_x, from_y = g_from.target_point
-            if to_target:
-                g_to, _ = self._resolve_target(to_target, obs_id)
-                if g_to.success and g_to.target_point:
-                    to_x, to_y = g_to.target_point
-
-        if from_x is None or from_y is None or to_x is None or to_y is None:
-            return UIActionResult(
-                status="failure",
-                action="ui.drag",
-                error="missing_coordinates",
-                message="Drag requires valid from (x, y) and to (x, y) coordinates or targets.",
-                verification_required=False,
-            ).to_dict()
+        source_coordinates = (from_x,from_y) if from_x is not None and from_y is not None else None
+        destination_coordinates = (to_x,to_y) if to_x is not None and to_y is not None else None
+        source, source_observation = self._resolve_target(from_target, obs_id, coords=source_coordinates)
+        destination, destination_observation = self._resolve_target(to_target, obs_id, coords=destination_coordinates)
+        observer = UIObserver.get_instance()
+        if (not source.success or not destination.success or
+                not observer.element_is_current(source_observation,source.element) or
+                not observer.element_is_current(destination_observation,destination.element)):
+            return UIActionResult(status="failure",action="ui.drag",error="target_not_found",
+                message="Both drag endpoints must be uniquely observed and current.",
+                verification_required=False,data={"input_attempted":False}).to_dict()
+        from_x,from_y=source.target_point
+        to_x,to_y=destination.target_point
 
         # Move to source, press down, move to destination, release
         self._move_cursor(from_x, from_y)
@@ -767,33 +784,25 @@ class UIActionExecutor:
         if _ACTION_EXECUTOR_OVERRIDE and getattr(_ACTION_EXECUTOR_OVERRIDE, "select", None):
             return _ACTION_EXECUTOR_OVERRIDE.select(args)
 
+        self._ensure_desktop()
         norm = args if isinstance(args, dict) else {}
-        target = norm.get("target")
-        value = norm.get("value") or norm.get("text") or ""
         obs_id = norm.get("observation_id")
-
-        # 1. Click target dropdown/combo if present
-        if target:
-            clk_res = self.click({"target": target, "observation_id": obs_id})
-            if clk_res.get("status") != "success":
-                return clk_res
-            time.sleep(0.15)
-
-        # 2. Type value or use arrow keys
-        if value:
-            self._send_unicode_text(value)
-            time.sleep(0.05)
-            self._send_vk_key(VK_MAP["enter"])
-
-        return UIActionResult(
-            status="success",
-            action="ui.select",
-            target=str(target) if target else None,
-            observation_id=obs_id,
-            verification_required=True,
-            message=f"Selected '{value}' in target '{target}'.",
-            data={"selected_value": value},
-        ).to_dict()
+        fresh, reason = self._check_fencing(obs_id)
+        observer = UIObserver.get_instance()
+        obs = observer.get_observation(obs_id) if obs_id else None
+        if not fresh or not obs:
+            return UIActionResult(status="failure",action="ui.select",error="stale_observation",
+                message="Observe the selection control again.",verification_required=False,
+                data={"input_attempted":False}).to_dict()
+        value = norm.get("value")
+        candidates = [e for e in obs.elements if e.enabled and (e.label==value or e.text==value)]
+        if len(candidates)!=1:
+            return UIActionResult(status="failure",action="ui.select",error="ambiguous_target" if candidates else "target_not_found",
+                message="The requested option is not uniquely observed; expand the control and observe again.",
+                verification_required=False,data={"input_attempted":False}).to_dict()
+        result = self.click({"target":candidates[0].element_id,"observation_id":obs_id})
+        result["action"] = "ui.select"
+        return result
 
     # ---------------------------------------------------------------------------
     # Action: ui.wait

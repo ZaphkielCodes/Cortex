@@ -8,8 +8,8 @@ and MUST return a structured ActionPlan.  It never has access to
 executors, shell commands, devices, files, permissions, or credentials.
 
 Providers:
-  - MockLLMProvider   — deterministic, for tests
-  - GeminiLLMProvider — Google Gemini (google-genai SDK)
+  - MockLLMProvider   â€” deterministic, for tests
+  - GeminiLLMProvider â€” Google Gemini (google-genai SDK)
 """
 
 import json
@@ -20,7 +20,8 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
-from .intent_schema import ActionPlan, ModelResult
+from .intent_schema import ModelResult
+from .tracing import observe_model_attempt
 
 log = logging.getLogger("cortex.llm")
 
@@ -41,8 +42,18 @@ class ReasoningProviderUnavailable(RuntimeError):
 
     @property
     def user_message(self):
+        if self.primary_category.startswith(("LOCAL_MODEL", "PRIVATE_MODEL", "PRIVACY_CLASSIFICATION")):
+            return "Private reasoning is unavailable. Start the configured local Ollama model; no request was sent to a cloud model."
+        if self.primary_category == "PROVIDER_NOT_CONFIGURED":
+            return "The AI provider is not configured. Set a supported provider and its API key in Cortex settings."
+        if self.primary_category == "CONTEXT_TOO_LARGE":
+            return "No eligible model with sufficient verified context capacity is available. Completion is unverified."
+        if self.primary_category == "PROVIDER_COOLDOWN":
+            return "The AI service is temporarily cooling down after a recent failure. Please try again shortly. No new model request was sent."
         if self.primary_category == "RATE_LIMIT_429":
             primary = "The primary AI service has reached its usage limit."
+        elif self.primary_category == "SERVICE_UNAVAILABLE_503":
+            primary = "The primary AI service is temporarily unavailable. Please try again shortly."
         elif self.primary_category == "DEADLINE_EXCEEDED":
             primary = "The primary AI service timed out."
         else:
@@ -88,641 +99,315 @@ class LLMProvider(ABC):
 
 
 # ---------------------------------------------------------------------------
-# Mock provider (deterministic, for tests)
+# Offline provider placeholder
 # ---------------------------------------------------------------------------
 
-# Keyword → (intent, capability, action) lookup for the mock
-_MOCK_RULES = [
-    # conversational responses
-    (["sorry", "i'm sorry", "im sorry"],
-     lambda text, ctx: ModelResult(type="RESPONSE", response_text="No need to apologize! How can I assist you today?")),
-    (["hello", "hi", "how are you"],
-     lambda text, ctx: ModelResult(type="RESPONSE", response_text="Hello! How can I help you today?")),
-    (["do it again", "do that again", "again"],
-     lambda text, ctx: _mock_repeat(text, ctx)),
-    # response
-    (["recursion", "explain"],
-     lambda text, ctx: ModelResult(type="RESPONSE", response_text="Recursion is a method of solving a problem where the solution depends on solutions to smaller instances of the same problem.")),
-    # app launch
-    (["open", "launch", "start", "run"],
-     lambda text, ctx: _mock_app_launch(text, ctx)),
-    # world state / situation summary
-    (["summary of", "situational summary", "current situation", "situation summary"],
-     lambda text, ctx: ActionPlan(
-         intent="get_world_state",
-         source_device=_source(ctx),
-         target_device_reference=None,
-         capability="context.get_world_state",
-         action="get_world_state",
-         arguments={},
-         requires_confirmation=False,
-         confidence=0.95,
-         user_facing_summary="getting world state",
-     )),
-    # device identity
-    (["what device", "which device", "device am i"],
-     lambda text, ctx: ActionPlan(
-         intent="get_device_state",
-         source_device=_source(ctx),
-         target_device_reference=None,
-         capability="context.get_device_state",
-         action="get_device_state",
-         arguments={"aspect": "identity"},
-         requires_confirmation=False,
-         confidence=0.95,
-         user_facing_summary="checking device identity",
-     )),
-    # network connectivity
-    (["internet", "connected to the internet", "am i online", "network status", "network connection"],
-     lambda text, ctx: ActionPlan(
-         intent="get_device_state",
-         source_device=_source(ctx),
-         target_device_reference=None,
-         capability="context.get_device_state",
-         action="get_device_state",
-         arguments={"aspect": "network"},
-         requires_confirmation=False,
-         confidence=0.95,
-         user_facing_summary="checking network connectivity",
-     )),
-    # device battery info
-    (["battery", "battery percentage", "battery level", "power level"],
-     lambda text, ctx: _mock_device_info(text, ctx)),
-    # file operations
-    (["move file", "move the file", "rename"],
-     lambda text, ctx: _mock_move_file(text, ctx)),
-    # screenshot
-    (["screenshot", "screen capture"],
-     lambda text, ctx: _mock_screenshot(text, ctx)),
-    # notification
-    (["notify", "notification", "alert"],
-     lambda text, ctx: _mock_notification(text, ctx)),
-    # delete (high-risk)
-    (["delete", "remove file", "erase"],
-     lambda text, ctx: _mock_delete(text, ctx)),
-    # shell (high-risk)
-    (["shell", "terminal", "command line", "cmd"],
-     lambda text, ctx: _mock_shell(text, ctx)),
-]
-
-
-def _source(ctx: Dict) -> str:
-    return ctx.get("device", {}).get("id", "unknown")
-
-
-def _mock_repeat(text: str, ctx: Dict) -> Any:
-    refs = ctx.get("session", {}).get("references", {})
-    last_action = refs.get("last_action")
-    if last_action == "take_screenshot":
-        return _mock_screenshot("screenshot", ctx)
-    elif last_action == "open_app":
-        app = refs.get("last_app", "calculator")
-        return _mock_app_launch(f"open {app}", ctx)
-    elif last_action == "get_status":
-        return _mock_device_info("battery", ctx)
-    return ModelResult(type="RESPONSE", response_text="I don't have a previous action to repeat.")
-
-
-def _mock_app_launch(text: str, ctx: Dict) -> ActionPlan:
-    words = text.lower().split()
-    # Find the app name: last meaningful word after "open"/"launch"/"start"/"run"
-    app_name = "unknown"
-    for trigger in ("open", "launch", "start", "run"):
-        if trigger in words:
-            idx = words.index(trigger)
-            rest = words[idx + 1:]
-            # strip filler words
-            rest = [w for w in rest if w not in ("the", "a", "an", "app", "application", "please", "on", "this", "my", "laptop", "device", "computer")]
-            if rest:
-                app_name = " ".join(rest)
-            break
-    return ActionPlan(
-        intent="open_app",
-        source_device=_source(ctx),
-        target_device_reference=None,
-        capability="app.launch",
-        action="open_app",
-        arguments={"app": app_name},
-        requires_confirmation=False,
-        confidence=0.95,
-        user_facing_summary=f"opening {app_name}",
-    )
-
-
-def _mock_device_info(text: str, ctx: Dict) -> ActionPlan:
-    return ActionPlan(
-        intent="get_device_status",
-        source_device=_source(ctx),
-        target_device_reference=None,
-        capability="device.info",
-        action="get_status",
-        arguments={},
-        requires_confirmation=False,
-        confidence=0.90,
-        user_facing_summary="checking device status",
-    )
-
-
-def _mock_move_file(text: str, ctx: Dict) -> ActionPlan:
-    return ActionPlan(
-        intent="move_file",
-        source_device=_source(ctx),
-        target_device_reference=None,
-        capability="fs.move",
-        action="move_file",
-        arguments={"src": "unknown", "dst": "unknown"},
-        requires_confirmation=True,
-        confidence=0.85,
-        user_facing_summary="moving a file",
-    )
-
-
-def _mock_screenshot(text: str, ctx: Dict) -> ActionPlan:
-    return ActionPlan(
-        intent="retrieve_recent_screenshot",
-        source_device=_source(ctx),
-        target_device_reference=None,
-        capability="screenshot.read",
-        action="take_screenshot",
-        arguments={},
-        requires_confirmation=False,
-        confidence=0.92,
-        user_facing_summary="taking a screenshot",
-    )
-
-
-def _mock_notification(text: str, ctx: Dict) -> ActionPlan:
-    return ActionPlan(
-        intent="show_notification",
-        source_device=_source(ctx),
-        target_device_reference=None,
-        capability="ui.notify",
-        action="show_notification",
-        arguments={"title": "Cortex", "message": text},
-        requires_confirmation=False,
-        confidence=0.88,
-        user_facing_summary="showing a notification",
-    )
-
-
-def _mock_delete(text: str, ctx: Dict) -> ActionPlan:
-    return ActionPlan(
-        intent="move_file",  # closest supported intent
-        source_device=_source(ctx),
-        target_device_reference=None,
-        capability="fs.move",
-        action="delete_file",
-        arguments={"path": "unknown"},
-        requires_confirmation=True,
-        confidence=0.80,
-        user_facing_summary="deleting a file",
-    )
-
-
-def _mock_shell(text: str, ctx: Dict) -> ActionPlan:
-    return ActionPlan(
-        intent="open_app",
-        source_device=_source(ctx),
-        target_device_reference=None,
-        capability="app.launch",
-        action="open_app",
-        arguments={"app": "cmd"},
-        requires_confirmation=False,
-        confidence=0.85,
-        user_facing_summary="opening command prompt",
-    )
-
-
 class MockLLMProvider(LLMProvider):
-    """Deterministic mock for testing.  Keyword matching, no network calls."""
+    """Offline placeholder. Tests needing decisions inject a scripted provider."""
 
     @property
-    def name(self) -> str:
+    def name(self):
         return "mock"
 
     @property
-    def model(self) -> str:
-        return "mock-v1"
+    def model(self):
+        return "mock"
 
-    async def generate_result(
-        self, user_text: str, context: Dict[str, Any], on_chunk: Optional[callable] = None
-    ) -> ModelResult:
-        if context.get("mode") in ("agent_decision", "result_interpretation"):
-            raise RuntimeError("Mock provider does not implement the agent runtime contract")
-        if context.get("mode") == "planning":
-            return self._generate_mock_plan(user_text, context)
-
-        lower = user_text.lower()
-        for keywords, handler in _MOCK_RULES:
-            if any(kw in lower for kw in keywords):
-                result = handler(user_text, context)
-                if isinstance(result, ActionPlan):
-                    log.info(f"[MockLLM] Matched intent={result.intent} for '{user_text}'")
-                    return ModelResult(type="ACTION", action_plan=result)
-                elif isinstance(result, ModelResult):
-                    return result
-                return result
-
-        # Fallback: low-confidence catch-all
-        return ModelResult(
-            type="ACTION",
-            action_plan=ActionPlan(
-                intent="show_notification",
-                source_device=_source(context),
-                target_device_reference=None,
-                capability="ui.notify",
-                action="show_notification",
-                arguments={"title": "Cortex", "message": user_text},
-                requires_confirmation=False,
-                confidence=0.4,
-                user_facing_summary="I'm not sure what to do with that",
-            )
-        )
-
-    def _generate_mock_plan(self, user_text: str, context: Dict[str, Any]) -> ModelResult:
-        lower = user_text.lower()
-        caps = context.get("available_capabilities", [])
-        avail_names = {c["name"] for c in caps if c.get("availability", True)}
-        target = context.get("target_device") or "asus"
-
-        # Check physical / 3D printing tasks
-        if any(w in lower for w in ("3d print", "print 3d", "fabricate", "hinge", "manufacturing")):
-            return ModelResult(
-                type="PLAN",
-                plan={"steps": [], "unachievable_reason": "No available capability for 3D printing or hardware fabrication."}
-            )
-
-        # Check condition-based wait goals ("When <condition>, <action>")
-        import re
-        m_when = re.search(r'\bwhen\s+(.+?),\s*(.+)', lower)
-        if m_when:
-            if "goal.wait" not in avail_names:
-                return ModelResult(
-                    type="PLAN",
-                    plan={"steps": [], "unachievable_reason": "No available wait capability supports conditional goal execution."}
-                )
-            cond_phrase = m_when.group(1).strip(" \t.,!?;:")
-            action_phrase = m_when.group(2).strip(" \t.,!?;:")
-
-            wait_step = None
-            m_dev_online = re.search(r'(\w+)\s+(?:comes\s+online|is\s+online|connects|reconnects)', cond_phrase)
-            if m_dev_online:
-                dev_target = m_dev_online.group(1)
-                wait_step = {
-                    "description": f"Wait for {dev_target} to come online",
-                    "capability": "goal.wait",
-                    "arguments": {
-                        "condition_type": "device_online",
-                        "condition_key": dev_target,
-                    },
-                }
-
-            m_signal_num = re.search(r'(heart[\s_-]?rate|battery|temperature|workload|cpu)\s*(?:goes\s+over|exceeds|>|is\s+greater\s+than)\s*(\d+)', cond_phrase)
-            if m_signal_num:
-                sig_raw = m_signal_num.group(1).replace(" ", "_").replace("-", "_")
-                sig_key = "health.heart_rate" if "heart" in sig_raw else sig_raw
-                threshold = int(m_signal_num.group(2))
-                wait_step = {
-                    "description": f"Wait for {sig_key} > {threshold}",
-                    "capability": "goal.wait",
-                    "arguments": {
-                        "condition_type": "world_state",
-                        "condition_key": sig_key,
-                        "operator": ">",
-                        "expected_value": threshold,
-                    },
-                }
-
-            if wait_step:
-                steps = [wait_step]
-                if any(w in action_phrase for w in ("notify", "alert", "tell me")):
-                    if "ui.notify" in avail_names:
-                        msg = "ASUS is online!" if "asus" in cond_phrase else f"{cond_phrase} condition met"
-                        steps.append({
-                            "description": "Notify user condition is satisfied",
-                            "capability": "ui.notify",
-                            "arguments": {
-                                "message": msg,
-                                "target_device": target,
-                            },
-                        })
-                    else:
-                        return ModelResult(
-                            type="PLAN",
-                            plan={"steps": [], "unachievable_reason": "Required ui.notify capability is not available on target device."}
-                        )
-                m_open = re.search(r'(?:open|launch|start|run)\s+([a-zA-Z0-9_\-\.\s]+)', action_phrase)
-                if m_open:
-                    if "app.launch" in avail_names:
-                        app_name = m_open.group(1).strip()
-                        steps.append({
-                            "description": f"Launch {app_name}",
-                            "capability": "app.launch",
-                            "arguments": {
-                                "app": app_name,
-                                "target_device": target,
-                            },
-                        })
-                    else:
-                        return ModelResult(
-                            type="PLAN",
-                            plan={"steps": [], "unachievable_reason": "Required app.launch capability is not available on target device."}
-                        )
-
-                if len(steps) > 1:
-                    return ModelResult(type="PLAN", plan={"steps": steps})
-
-        # Check directory / filesystem listing tasks
-        if any(w in lower for w in ("list the files", "list files", "count files", "count the files", "downloads folder", "how many files")):
-            if "fs.list" not in avail_names:
-                return ModelResult(
-                    type="PLAN",
-                    plan={"steps": [], "unachievable_reason": "No available filesystem capability supports listing directory contents."}
-                )
-            from .environment import resolve_location_path
-            loc_path = resolve_location_path("downloads")
-            steps = [
-                {
-                    "description": "Inspect and list direct files in Downloads folder",
-                    "capability": "fs.list",
-                    "arguments": {"path": str(loc_path or "downloads"), "target_device": target},
-                }
-            ]
-            if any(w in lower for w in ("notify", "tell me")):
-                if "ui.notify" in avail_names:
-                    steps.append({
-                        "description": "Notify user with file count",
-                        "capability": "ui.notify",
-                        "arguments": {"message": "Downloads folder contents retrieved.", "target_device": target},
-                    })
-            return ModelResult(type="PLAN", plan={"steps": steps})
-
-        # Check grounded filesystem actions (e.g. delete shortcut/file or cleanup collection from desktop)
-        from .target_resolver import TargetResolver
-        resolved_entity = TargetResolver.resolve(user_text, current_device=target)
-        if resolved_entity.action in ("delete", "cleanup") and resolved_entity.target_kind in ("filesystem_item", "collection"):
-            if "fs.list" not in avail_names:
-                return ModelResult(
-                    type="PLAN",
-                    plan={"steps": [], "unachievable_reason": "No available filesystem capability supports inspecting directory to resolve target item."}
-                )
-            from .environment import resolve_location_path
-            loc = resolved_entity.location or "desktop"
-            loc_path = resolve_location_path(loc)
-            steps = [
-                {
-                    "description": f"Inspect {loc} to resolve {resolved_entity.target_name or 'collection items'}",
-                    "capability": "fs.list",
-                    "arguments": {"path": str(loc_path or loc), "target_device": target},
-                }
-            ]
-            return ModelResult(type="PLAN", plan={"steps": steps, "resolved_target": resolved_entity.to_dict()})
-
-        # Replan
-        if context.get("is_replan"):
-            failed = context.get("failed_step") or {}
-            failed_cap = failed.get("capability")
-            if failed_cap == "ui.notify" and "ui.notify" in avail_names:
-                return ModelResult(
-                    type="PLAN",
-                    plan={
-                        "steps": [
-                            {
-                                "description": "Notify user via fallback notification channel",
-                                "capability": "ui.notify",
-                                "arguments": {"message": "Notification sent via fallback", "target_device": target},
-                            }
-                        ]
-                    }
-                )
-            elif failed_cap and "ui.notify" in avail_names and failed_cap != "ui.notify":
-                return ModelResult(
-                    type="PLAN",
-                    plan={
-                        "steps": [
-                            {
-                                "description": "Notify user of partial completion and status",
-                                "capability": "ui.notify",
-                                "arguments": {"message": "Task partially completed with alternative path", "target_device": target},
-                            }
-                        ]
-                    }
-                )
-            elif failed_cap == "device.status" and "device.info" in avail_names:
-                return ModelResult(
-                    type="PLAN",
-                    plan={
-                        "steps": [
-                            {
-                                "description": "Fallback device hardware check",
-                                "capability": "device.info",
-                                "arguments": {"target_device": target},
-                            }
-                        ]
-                    }
-                )
-            return ModelResult(
-                type="PLAN",
-                plan={"steps": [], "unachievable_reason": "No valid alternative capability available to fulfill remaining goal."}
-            )
-
-        # Standard: check device and notify
-        steps = []
-        needs_status = any(w in lower for w in ("check", "status", "battery", "inspect", "device"))
-        needs_notify = any(w in lower for w in ("notify", "alert", "tell me", "message"))
-
-        if needs_status:
-            if "device.status" in avail_names:
-                steps.append({
-                    "description": "Check current device status",
-                    "capability": "device.status",
-                    "arguments": {"target_device": target},
-                })
-            elif "device.info" in avail_names:
-                steps.append({
-                    "description": "Check device info",
-                    "capability": "device.info",
-                    "arguments": {"target_device": target},
-                })
-            else:
-                return ModelResult(
-                    type="PLAN",
-                    plan={"steps": [], "unachievable_reason": "Required device status capability is not available on target device."}
-                )
-
-        if needs_notify:
-            if "ui.notify" in avail_names:
-                steps.append({
-                    "description": "Notify the user with the result",
-                    "capability": "ui.notify",
-                    "arguments": {"message": "Device status check completed successfully.", "target_device": target},
-                })
-            else:
-                return ModelResult(
-                    type="PLAN",
-                    plan={"steps": [], "unachievable_reason": "Required ui.notify capability is not available on target device."}
-                )
-
-        if steps:
-            return ModelResult(type="PLAN", plan={"steps": steps})
-
-        return ModelResult(
-            type="PLAN",
-            plan={"steps": [], "unachievable_reason": f"No available capabilities match requested task: '{user_text}'."}
-        )
+    async def generate_result(self, user_text, context, on_chunk=None):
+        # No keyword rules, canned execution plans or notification fallback.
+        raise ReasoningProviderUnavailable("PROVIDER_NOT_CONFIGURED")
 
 
-# ---------------------------------------------------------------------------
-# Google Gemini provider
-# ---------------------------------------------------------------------------
-
-# System prompt that constrains the LLM to structured output only.
-# It NEVER receives secrets, credentials, or executor access.
 _GEMINI_SYSTEM_PROMPT = """\
+
 You are the intelligence engine for Cortex, a personal AI assistant.
 
+
+
 Your ONLY job is to convert a natural-language user request into a structured JSON ModelResult.
+
 You must NEVER:
+
 - Execute commands yourself
+
 - Access files, shells, devices, or credentials
+
 - Invent device IDs — if the target is ambiguous, set target_device_reference to the user's exact words and set confidence below 0.7
 
+
+
 If the user's request contains ambiguous references like "it", "that", "do it", or "close it", use the provided Conversation History and Active References to resolve the reference. 
+
 If the user says "do it" or similar, and there is a "last_action" or "last_intent" in the Active References, output an ACTION corresponding to that intent.
+
 If there are multiple possible interpretations or multiple recently discussed targets without a clear dominant one, you MUST return a RESPONSE asking for clarification. Do NOT guess the target. If you are uncertain, return a RESPONSE asking for clarification.
 
 
+
+
+
 You MUST output ONLY a single JSON object matching this schema (no markdown, no explanation):
+
 {
+
   "type": "<one of: RESPONSE, ACTION, TASK>",
+
   "response_text": "<Your conversational reply if type is RESPONSE, else null>",
+
   "action_plan": {
+
     "intent": "<one of: open_app, show_notification, move_file, get_device_status, resume_session, list_online_devices, retrieve_recent_file, retrieve_recent_screenshot, create_task, read_task_status, store_memory, remember_person, get_person, search_people, update_person, get_current_speaker, resolve_speaker, link_speaker_person, list_recent_speakers, get_social_context, remember_social_interaction, get_world_state, update_signal, get_device_state, get_recent_events>",
+
     "source_device": "<from context>",
+
     "target_device": null,
+
     "target_device_reference": null, // ALWAYS null unless the user explicitly names a remote device (e.g., 'on the living room pc')
+
     "capability": "<one of: app.launch, ui.notify, fs.move, device.info, session.resume, hub.read, fs.read, screenshot.read, task.write, task.read, memory.write, people.remember, people.get, people.search, people.update, speaker.get_current, speaker.resolve, speaker.link_person, speaker.list_recent, social.context, social.remember_interaction, context.get_world_state, context.update_signal, context.get_device_state, context.get_recent_events>",
+
     "action": "<the executor command name, e.g. 'open_app', 'move_file', 'show_notification', 'take_screenshot', 'get_status', 'store_memory', 'remember_person', 'get_person', 'search_people', 'update_person', 'get_current_speaker', 'resolve_speaker', 'link_speaker_person', 'list_recent_speakers', 'get_social_context', 'remember_social_interaction', 'get_world_state', 'update_signal', 'get_device_state', 'get_recent_events'>",
+
     "arguments": { ... },
+
     "requires_confirmation": <true if destructive/sensitive, false for safe actions like opening apps>,
+
     "confidence": <0.0 to 1.0>,
+
     "user_facing_summary": "<short phrase describing what will happen>"
+
   }
+
 }
+
+
 
 NOTE: If type is "RESPONSE" or "TASK", you MUST set "action_plan" to null.
 
+
+
 Use "RESPONSE" for conversational queries, questions, or explanations where no device action is needed and the answer cannot be retrieved by a capability.
+
 Use "ACTION" (and fill out "action_plan") when the user asks you to perform a single specific action on a device, OR when they ask a question that can be answered by retrieving data via one of the available capabilities (e.g. asking "what is my battery" -> use get_device_status).
+
 Use "TASK" when the user requests a multi-step workflow, logic that requires verifying the outcome of an action before proceeding, or multiple consecutive operations (e.g. 'Open Calculator and then tell me my battery', or 'Prepare these files and send them when my laptop reconnects').
 
+
+
 MEMORY & PEOPLE POLICY:
+
 Do not treat all conversation as permanent memory. Avoid blindly writing arbitrary permanent memories. 
+
 Write memory explicitly using the "store_memory" intent only for: device relationships, recurring preferences, project facts, explicit user facts/preferences.
+
 For people, friends, family, coworkers, communication preferences, and personal facts:
+
 Use "remember_person" -> capability "people.remember" (action: "remember_person").
+
 Do NOT write memory for: random one-off conversation, transient app launches, temporary failures, sarcasm, jokes, daily moods, or speculative judgments.
 
+
+
 SOCIAL & RELATIONSHIP CONTEXT:
+
 - You are Cortex, a unified assistant identity. Adapt tone naturally based on who is speaking:
+
   * Primary User: collaborative, direct, helpful
+
   * Friend: warm, familiar, casual
+
   * Colleague / Manager: professional, polite, concise
+
   * Family / Sibling: familiar, warm, respectful
+
   * Unknown speaker: neutral, polite, objective
+
 - In multi-speaker conversations, consider stated constraints and preferences of present participants (e.g. food dislikes, timing, preferences).
 
+
+
 Intent-to-capability mapping:
+
   open_app -> app.launch (action: open_app)
+
   show_notification -> ui.notify (action: show_notification)
+
   move_file -> fs.move (action: move_file)
+
   get_device_status -> device.info (action: get_status)
+
   resume_session -> session.resume
+
   list_online_devices -> hub.read
+
   retrieve_recent_file -> fs.read
+
   retrieve_recent_screenshot -> screenshot.read (action: take_screenshot)
+
   create_task -> task.write
+
   read_task_status -> task.read
+
   store_memory -> memory.write (action: store_memory)
+
   remember_person -> people.remember (action: remember_person)
+
   get_person -> people.get (action: get_person)
+
   search_people -> people.search (action: search_people)
+
   update_person -> people.update (action: update_person)
+
   get_current_speaker -> speaker.get_current (action: get_current_speaker)
+
   resolve_speaker -> speaker.resolve (action: resolve_speaker)
+
   link_speaker_person -> speaker.link_person (action: link_speaker_person)
+
   list_recent_speakers -> speaker.list_recent (action: list_recent_speakers)
+
   get_social_context -> social.context (action: get_social_context)
+
   remember_social_interaction -> social.remember_interaction (action: remember_social_interaction)
+
   get_world_state -> context.get_world_state (action: get_world_state)
+
   update_signal -> context.update_signal (action: update_signal)
+
   get_device_state -> context.get_device_state (action: get_device_state)
+
   get_recent_events -> context.get_recent_events (action: get_recent_events)
+
   calendar_get_current -> calendar.get_current (action: calendar_get_current)
+
   calendar_get_next -> calendar.get_next (action: calendar_get_next)
+
   calendar_get_availability -> calendar.get_availability (action: calendar_get_availability)
+
   calendar_status -> calendar.status (action: calendar_status)
+
   telemetry_get_system_usage -> telemetry.get_system_usage (action: telemetry_get_system_usage)
+
   telemetry_get_hardware_info -> telemetry.get_hardware_info (action: telemetry_get_hardware_info)
 
+
+
 WORLD STATE & SITUATION AWARENESS:
+
 - When world_state is present in Context, use it to understand the user's situation:
+
   * Location: current place/label (e.g. home, office, library)
+
   * Calendar: current/upcoming meeting, free/busy status
+
   * Foreground activity: what app or window the user is currently using
+
   * Active task: background or ongoing multi-step task
+
   * Device status: battery percentage, network connectivity
+
   * System telemetry: CPU, RAM, disk, GPU, specs, machine model
+
 - Answer situational questions naturally using these fresh signals.
+
 - DO NOT collapse unrelated queries into get_device_status / get_status!
+
   * Device identity / model ("what device am I using", "what laptop model is this") -> use get_device_state or answer from context.world_state.
+
   * System telemetry ("what is my CPU usage", "how much RAM am I using", "how much disk space do I have left") -> use telemetry_get_system_usage or answer from context.world_state.
+
   * Machine specs / hardware ("what GPU do I have", "what CPU do I have", "laptop specs") -> use telemetry_get_hardware_info or answer from context.world_state.
+
   * Calendar queries -> use calendar capabilities or answer from context.world_state. If disconnected, clearly state disconnected. Do not hallucinate events.
+
   * Internet / network connectivity ("am I connected to the internet") -> use get_device_state with argument {"aspect": "network"} or answer from context.world_state. NEVER route network queries to get_status.
+
   * Only battery percentage / power queries should route to get_device_status (action: get_status).
+
   * If a signal is unavailable, report that it is unavailable. Never substitute unrelated device information.
 
+
+
 PHASE 8D — AUTHORITATIVE TIME/DATE/TIMEZONE GROUNDING:
+
 - The world_state object ALWAYS contains these runtime temporal fields sourced from the OS clock:
+
   * current_datetime: ISO-8601 local datetime string (authoritative)
+
   * current_date: local date string (YYYY-MM-DD)
+
   * current_time: local time in 12-hour format (e.g. "11:45 PM")
+
   * day_of_week: current day name (e.g. "Friday")
+
   * tomorrow_date: tomorrow's date (YYYY-MM-DD)
+
   * tomorrow_name: tomorrow's day name (e.g. "Saturday")
+
   * timezone: OS system timezone name (e.g. "Eastern Standard Time", "Eastern Daylight Time")
+
   * utc_offset: UTC offset string (e.g. "UTC-04:00")
+
 - CRITICAL: When answering "what time is it?", "what day is it?", "what's today's date?", "what day is tomorrow?", "what timezone are you on?":
+
   * ALWAYS use context.world_state.current_time, current_date, day_of_week, tomorrow_date, timezone, utc_offset.
+
   * NEVER guess, estimate, or use training-data knowledge for these. The runtime values are always present.
+
 - When answering calendar queries, use context.world_state.current_date and tomorrow_date to correctly determine which events are "today" or "tomorrow".
+
 - When the user asks a follow-up calendar question like "what about tomorrow?" after a calendar query, interpret it as "what calendar events do I have tomorrow?" Do NOT ask for clarification.
 
+
+
 Action-to-arguments mapping:
+
   open_app: {"app": "<application name>"}
+
   show_notification: {"title": "<title>", "message": "<body>"}
+
   move_file: {"src": "<source path>", "dst": "<destination path>"}
+
   take_screenshot: {}
+
   get_status: {}
+
   get_device_state: {"aspect": "<'identity' | 'network' | 'battery' | null>", "device_id": "<optional device id>"}
+
   get_world_state: {}
+
   store_memory: {"key": "<key>", "value": "<value>", "category": "<category>"}
+
   remember_person: {"name": "<name>", "relationship_type": "<optional relationship, e.g. brother, friend>", "aliases": ["<optional aliases>"], "notes": "<optional notes>", "key": "<optional fact key>", "value": "<optional fact value>"}
+
   get_person: {"name": "<name or pronoun>"}
+
   search_people: {"query": "<query>"}
+
   update_person: {"name": "<name>", "relationship_type": "<optional>", "notes": "<optional>"}
 
+
+
 Permission guidance (for requires_confirmation):
+
   - Low-risk (requires_confirmation=false): opening apps, reading device info, taking screenshots, reading tasks, listing devices, notifications
+
   - High-risk (requires_confirmation=true): moving/deleting/editing files, sending messages/email, installs, purchases, destructive shell commands, sensitive external actions
 
+
+
 If the user says something like "open Spotify" or "open Notepad", that is low-risk: requires_confirmation=false, confidence=0.95.
+
 If the user asks to delete or move a file, that is higher-risk: requires_confirmation=true.
 
+
+
 CRITICAL RULE ON APP LAUNCHES:
+
 If the user's input is a single word or ambiguous (e.g. "Spotify", "Calculator") WITHOUT a clear action verb (like "open", "launch", "start"), DO NOT output an ACTION to open the app. Instead, output a RESPONSE explaining what the app is or asking for clarification.
+
 Only output an open_app ACTION if the user explicitly requests an action (e.g. "Open Spotify", "Launch Calculator").
+
 """
 
 
@@ -733,6 +418,8 @@ class ModelDeadlineExceeded(TimeoutError):
 
 def classify_failure(e: Exception) -> str:
     """Classify model exceptions into deterministic categories."""
+    if isinstance(e, ProviderHTTPError) and e.status_code == 413:
+        return "CONTEXT_TOO_LARGE"
     if isinstance(e, ModelDeadlineExceeded):
         return "DEADLINE_EXCEEDED"
     err_str = str(e).lower()
@@ -787,6 +474,7 @@ class GeminiLLMProvider(LLMProvider):
     def model(self) -> str:
         return self._model_name
 
+    @observe_model_attempt
     async def generate_result(
         self, user_text: str, context: Dict[str, Any], on_chunk: Optional[callable] = None
     ) -> ModelResult:
@@ -883,8 +571,11 @@ class GeminiLLMProvider(LLMProvider):
             )
             system_inst = _GEMINI_SYSTEM_PROMPT
 
-        lane = context.get("routing_lane") or ("FAST_RESPONSE" if force_response else "STRUCTURED_MODEL")
+        lane = context.get("routing_lane") or ("STRUCTURED_MODEL" if mode_agent_decision or mode_result_interpretation
+                                               else "FAST_RESPONSE" if force_response else "STRUCTURED_MODEL")
         deadline_ttft, deadline_total = get_lane_deadlines(lane)
+        from .routing_profiles import request_timeout
+        deadline_total = request_timeout(context,deadline_total)
 
         t0 = time.monotonic()
         trace = context.get("trace")
@@ -931,9 +622,10 @@ class GeminiLLMProvider(LLMProvider):
                 )
                 
                 t_first = time.monotonic()
-                if trace and hasattr(trace, "record_stage"):
+                has_first_token = bool(first_chunk is not None and first_chunk.text)
+                if has_first_token and trace and hasattr(trace, "record_stage"):
                     trace.record_stage("model_first_token", t_first)
-                if latency_metrics is not None:
+                if has_first_token and latency_metrics is not None:
                     latency_metrics["model_first_token"] = t_first
 
                 full_text = ""
@@ -955,6 +647,13 @@ class GeminiLLMProvider(LLMProvider):
                         break
                     chunk_text = chunk.text
                     if chunk_text:
+                        if not has_first_token:
+                            has_first_token = True
+                            t_first = time.monotonic()
+                            if trace and hasattr(trace, "record_stage"):
+                                trace.record_stage("model_first_token", t_first)
+                            if latency_metrics is not None:
+                                latency_metrics["model_first_token"] = t_first
                         full_text += chunk_text
                         await on_chunk(chunk_text)
                 
@@ -977,8 +676,8 @@ class GeminiLLMProvider(LLMProvider):
                 log.info(f"[Latency] Gemini request end (error): {time.monotonic() - t0:.3f}s")
                 raise
 
-        def _call_gemini():
-            response = client.models.generate_content(
+        async def _call_gemini():
+            response = await client.aio.models.generate_content(
                 model=self._model_name,
                 contents=user_message,
                 config={
@@ -986,15 +685,27 @@ class GeminiLLMProvider(LLMProvider):
                     "temperature": 0.1,
                     "max_output_tokens": 2048 if mode_agent_decision else 512,
                     **({"response_mime_type": "application/json"} if mode_agent_decision else {}),
+                    **({"http_options":{"timeout":int(deadline_total*1000),"retry_options":{"attempts":1}}}
+                       if context.get("router_managed_retries") and context.get("_router_timeout_seconds") else {}),
                 },
             )
             return response.text
 
         try:
-            raw_text = await asyncio.wait_for(
-                loop.run_in_executor(None, _call_gemini),
-                timeout=deadline_total,
-            )
+            # Retry only an explicitly failed inference request, never a capability
+            # or an ambiguous timeout. Both attempts share one total time budget.
+            async def _request_with_recovery():
+                for attempt in range(2):
+                    try:
+                        return await _call_gemini()
+                    except Exception as exc:
+                        remaining = deadline_total - (time.monotonic() - t0)
+                        status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+                        if attempt or status != 503 or remaining <= 1.0 or context.get("router_managed_retries"):
+                            raise
+                        log.info("gemini_retry reason=temporary_503 attempt=2")
+                        await asyncio.sleep(.5)
+            raw_text = await asyncio.wait_for(_request_with_recovery(), timeout=deadline_total)
         except asyncio.TimeoutError:
             t_err = time.monotonic()
             log.info(f"[Latency] Gemini request end (timeout): {t_err - t0:.3f}s")
@@ -1002,10 +713,8 @@ class GeminiLLMProvider(LLMProvider):
 
         t_complete = time.monotonic()
         if trace and hasattr(trace, "record_stage"):
-            trace.record_stage("model_first_token", t_complete)
             trace.record_stage("model_complete", t_complete)
         if latency_metrics is not None:
-            latency_metrics["model_first_token"] = t_complete
             latency_metrics["model_complete"] = t_complete
 
         elapsed = t_complete - t0
@@ -1050,6 +759,16 @@ class GeminiLLMProvider(LLMProvider):
 # ---------------------------------------------------------------------------
 # Circuit breaker and fallback provider
 # ---------------------------------------------------------------------------
+
+class UnavailableLLMProvider(LLMProvider):
+    """A configuration error must not silently enable deterministic demo behavior."""
+    name = "unavailable"
+    model = "not-configured"
+    configured = False
+
+    async def generate_result(self, user_text, context, on_chunk=None):
+        raise ReasoningProviderUnavailable("PROVIDER_NOT_CONFIGURED")
+
 
 class CircuitBreakerProvider(LLMProvider):
     def __init__(self, primary: LLMProvider, fallback: Optional[LLMProvider] = None):
@@ -1120,7 +839,7 @@ class CircuitBreakerProvider(LLMProvider):
                     log.error(f"[{self.name}] Circuit breaker tripped! Open for 60s.")
 
             # Do NOT blindly retry the same failing provider! Fail over immediately to fallback.
-            if self.fallback:
+            if self.fallback and context.get("allow_provider_fallback", True):
                 if trace:
                     trace.fallback_occurred = True
                 log.info(f"[{self.name}] Failing over immediately to fallback provider: {self.fallback.name}")
@@ -1147,7 +866,7 @@ class CircuitBreakerProvider(LLMProvider):
     ) -> ModelResult:
         trace = context.get("trace")
         fb_cat, fallback_status = None, None
-        if self.fallback:
+        if self.fallback and context.get("allow_provider_fallback", True):
             try:
                 log.info(f"[{self.name}] Invoking fallback provider: {self.fallback.name}")
                 if trace:
@@ -1178,167 +897,6 @@ class CircuitBreakerProvider(LLMProvider):
             response_text=get_user_friendly_error(primary_failure_cat)
         )
 
-class OpenRouterLLMProvider(LLMProvider):
-    """Fallback provider using OpenRouter API."""
-
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "google/gemini-3.8-flash-exp:free"):
-        self._api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
-        self._model_name = model_name
-
-        if not self._api_key:
-            log.warning("OPENROUTER_API_KEY not set. OpenRouterLLMProvider will fail on requests.")
-
-    @property
-    def name(self) -> str:
-        return "openrouter"
-
-    @property
-    def model(self) -> str:
-        return self._model_name
-
-    async def generate_result(
-        self, user_text: str, context: Dict[str, Any], on_chunk: Optional[callable] = None
-    ) -> ModelResult:
-        import httpx
-
-        safe_context = {
-            "source_device_id": context.get("device", {}).get("id", "unknown"),
-            "source_device_name": context.get("device", {}).get("name", "unknown"),
-            "source_device_capabilities": context.get("device", {}).get("capabilities", []),
-            "memories": context.get("memory", []),
-            "people": context.get("people", []),
-            "speaker": context.get("speaker", {}),
-            "current_speaker": context.get("current_speaker", {}),
-            "social_context": context.get("social_context", {}),
-            "world_state": context.get("world_state", {}),
-        }
-        
-        session = context.get("session", {})
-        if session:
-            from .session_context import SessionContextManager
-            safe_context["conversation_history"] = SessionContextManager.format_context_for_prompt(session)
-
-        force_task_orchestration = context.get("force_task_orchestration", False)
-        force_response = context.get("force_response_only", False)
-        
-        if context.get("mode") in ("agent_decision", "result_interpretation"):
-            system_inst = context["system_prompt"]
-            user_message = json.dumps({"request": user_text,
-                "conversation_history": context.get("conversation_history", []),
-                "tool_result": context.get("tool_result"), "capability": context.get("capability")})
-            force_response = True
-        elif force_task_orchestration:
-            user_message = f"{user_text}\n\nContext:\n{json.dumps(safe_context, indent=2)}"
-            system_inst = "You are the Cortex Phase 6 Task Orchestrator. Output ONLY a valid JSON ModelResult object with type='TASK_STEP'."
-        elif force_response:
-            user_message = f"User request: \"{user_text}\"\n\nContext:\n{json.dumps(safe_context, indent=2)}\n\nRespond conversationally directly. No JSON."
-            system_inst = "You are Cortex, a helpful AI assistant. Answer directly, conversationally, concisely. No JSON formatting."
-        else:
-            user_message = (
-                f"User request: \"{user_text}\"\n\n"
-                f"Context:\n{json.dumps(safe_context, indent=2)}\n\n"
-                f"Respond with ONLY the JSON ModelResult object."
-            )
-            system_inst = _GEMINI_SYSTEM_PROMPT
-
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "HTTP-Referer": "http://localhost:8000",
-            "X-Title": "Cortex Hub",
-            "Content-Type": "application/json"
-        }
-
-        payload = {
-            "model": self._model_name,
-            "messages": [
-                {"role": "system", "content": system_inst},
-                {"role": "user", "content": user_message}
-            ],
-            "temperature": 0.1,
-            "max_tokens": 2048 if context.get("mode") == "agent_decision" else 512,
-        }
-        if not force_response:
-            payload["response_format"] = {"type": "json_object"}
-
-        from .config import DEADLINE_FALLBACK_TOTAL
-        t0 = time.monotonic()
-        trace = context.get("trace")
-        latency_metrics = context.get("latency_metrics")
-        if trace and hasattr(trace, "record_stage"):
-            trace.record_stage("model_request_started", t0)
-        if latency_metrics is not None:
-            latency_metrics["model_request_started"] = t0
-
-        log.info(f"[Latency] Model provider selected: OpenRouter (timeout={DEADLINE_FALLBACK_TOTAL:.1f}s)")
-        log.info(f"[Latency] OpenRouter fallback start: 0.000s")
-        
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=DEADLINE_FALLBACK_TOTAL)
-                if resp.status_code != 200:
-                    raise ProviderHTTPError("OpenRouter", resp.status_code)
-                data = resp.json()
-                raw_text = data["choices"][0]["message"]["content"]
-        except Exception as e:
-            log.info(f"[Latency] OpenRouter fallback end (error): {time.monotonic() - t0:.3f}s")
-            if isinstance(e, ProviderHTTPError):
-                raise
-            raise Exception(f"OpenRouter API request failed: {e}")
-
-        t_complete = time.monotonic()
-        if trace and hasattr(trace, "record_stage"):
-            trace.record_stage("model_first_token", t_complete)
-            trace.record_stage("model_complete", t_complete)
-        if latency_metrics is not None:
-            latency_metrics["model_first_token"] = t_complete
-            latency_metrics["model_complete"] = t_complete
-
-        elapsed = t_complete - t0
-        log.info(f"[OpenRouter] Response received in {elapsed:.2f}s")
-        log.info(f"[Latency] OpenRouter fallback end: {elapsed:.3f}s")
-
-        if force_response:
-            resp_clean = raw_text.strip()
-            if on_chunk:
-                try:
-                    await on_chunk(resp_clean)
-                except Exception:
-                    pass
-            return ModelResult(type="RESPONSE", response_text=resp_clean)
-
-        # Parse and validate
-        try:
-            if raw_text is None:
-                raise ValueError("OpenRouter returned None for content")
-            cleaned = raw_text.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")
-                lines = [l for l in lines if not l.strip().startswith("```")]
-                cleaned = "\n".join(lines)
-
-            parsed = json.loads(cleaned)
-        except json.JSONDecodeError as e:
-            err_snip = raw_text[:300] if raw_text else "None"
-            log.error(f"[OpenRouter] Malformed JSON response: {err_snip} | Error: {e}")
-            raise ValueError(f"LLM returned invalid JSON: {e}. Raw: {err_snip}")
-
-        try:
-            res = ModelResult(**parsed)
-        except Exception as e:
-            err_snip = raw_text[:300] if raw_text else "None"
-            log.error(f"[OpenRouter] ModelResult validation failed: {e} | Raw JSON: {err_snip}")
-            raise ValueError(f"LLM output does not match ModelResult schema: {e}")
-
-        if res.type == "ACTION" and res.action_plan:
-            log.info(
-                f"[OpenRouter] intent={res.action_plan.intent} action={res.action_plan.action} "
-                f"confidence={res.action_plan.confidence:.2f} target_ref={res.action_plan.target_device_reference}"
-            )
-        else:
-            log.info(f"[OpenRouter] type={res.type} response_text={bool(res.response_text)}")
-            
-        return res
-
 _active_provider: Optional[LLMProvider] = None
 
 def get_llm_provider() -> LLMProvider:
@@ -1346,6 +904,9 @@ def get_llm_provider() -> LLMProvider:
     global _active_provider
     if _active_provider is None:
         _active_provider = _create_default_provider()
+        if os.environ.get("CORTEX_LOCAL_MODEL") and os.environ.get("CORTEX_LLM_PROVIDER", "direct").lower() not in {"mock", "ollama"}:
+            from .local_model import OllamaLLMProvider, PrivacyAwareRouter
+            _active_provider = PrivacyAwareRouter(_active_provider, OllamaLLMProvider())
     return _active_provider
 
 def set_llm_provider(provider: LLMProvider) -> None:
@@ -1359,34 +920,45 @@ def _create_default_provider() -> LLMProvider:
     from dotenv import load_dotenv
     load_dotenv()
 
-    provider_name = os.environ.get("CORTEX_LLM_PROVIDER", "gemini").lower()
+    provider_name = os.environ.get("CORTEX_LLM_PROVIDER", "direct").lower()
     
-    if provider_name == "mock":
+    if provider_name in {"direct", "groq", "nvidia"}:
+        from .direct_provider import DirectLLMProvider
+        from .direct_router import DirectModelRouter
+        from .provider_health import ProviderHealthStore
+        try:
+            if provider_name == "direct":
+                router = DirectModelRouter()
+            else:
+                if provider_name == "nvidia" and os.getenv("CORTEX_ENABLE_NVIDIA_TRIAL", "0") != "1":
+                    return UnavailableLLMProvider()
+                model = os.getenv("CORTEX_GROQ_MODEL", "qwen/qwen3.8-27b") if provider_name == "groq" else os.getenv("CORTEX_NVIDIA_MODEL", "deepseek-ai/deepseek-v4.1-flash")
+                provider = DirectLLMProvider(provider_name, model)
+                router = DirectModelRouter([provider] if provider.configured else [],health=ProviderHealthStore.default())
+        except ValueError:
+            log.warning("Invalid direct provider model configuration; reasoning is unavailable")
+            return UnavailableLLMProvider()
+        return router if router.configured else UnavailableLLMProvider()
+    elif provider_name == "ollama":
+        from .local_model import OllamaLLMProvider
+        return OllamaLLMProvider()
+    elif provider_name == "mock":
         log.info("Using MockLLMProvider (CORTEX_LLM_PROVIDER=mock)")
         return MockLLMProvider()
     elif provider_name == "gemini":
         api_key = os.environ.get("GEMINI_API_KEY", "")
         if not api_key:
-            log.warning("GEMINI_API_KEY not set, falling back to MockLLMProvider")
-            return MockLLMProvider()
+            log.warning("GEMINI_API_KEY not set; reasoning is unavailable")
+            return UnavailableLLMProvider()
         else:
             model = os.environ.get("CORTEX_GEMINI_MODEL", "gemini-3.8-flash")
             log.info(f"Using GeminiLLMProvider (model={model})")
             primary = GeminiLLMProvider(api_key=api_key, model_name=model)
             
-            fallback = None
-            or_key = os.environ.get("OPENROUTER_API_KEY", "")
-            if or_key:
-                or_model = os.environ.get("CORTEX_OPENROUTER_MODEL")
-                if not or_model:
-                    or_model = "google/gemini-3.8-flash-exp:free"
-                    log.warning(f"CORTEX_OPENROUTER_MODEL is missing. Falling back to default: {or_model}")
-                log.info(f"OpenRouter key found. Using OpenRouterLLMProvider as fallback (model={or_model})")
-                fallback = OpenRouterLLMProvider(api_key=or_key, model_name=or_model)
-            else:
-                log.warning("No OPENROUTER_API_KEY found, Gemini will have no fallback.")
-                
-            return CircuitBreakerProvider(primary=primary, fallback=fallback)
+            from .direct_router import DirectModelRouter
+            from .gemini_route import GeminiRoute
+            from .provider_health import ProviderHealthStore
+            return DirectModelRouter([GeminiRoute(api_key=api_key,model_name=model)],health=ProviderHealthStore.default())
     else:
-        log.warning(f"Unknown provider '{provider_name}', falling back to MockLLMProvider")
-        return MockLLMProvider()
+        log.warning("Unsupported provider configured; reasoning is unavailable")
+        return UnavailableLLMProvider()

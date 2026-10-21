@@ -13,11 +13,23 @@ Peer-address policy
 
 import ipaddress
 import os
+import platform
 from typing import Optional
 from dotenv import load_dotenv
 
 # Ensure .env is loaded (especially for OAuth credentials)
 load_dotenv()
+
+
+def get_hub_device_id():
+    """Configured runtime identity; a device name never implies trust or liveness."""
+    return os.getenv("CORTEX_HUB_DEVICE_ID") or platform.node()
+
+
+def hub_desktop_allowed(device_id):
+    return (os.getenv("CORTEX_ENABLE_HUB_DESKTOP", "0") == "1"
+            and os.getenv("CORTEX_HOST_LOCALITY", "local_device") != "cloud_worker"
+            and device_id == get_hub_device_id())
 
 # ---------------------------------------------------------------------------
 # Network binding
@@ -77,7 +89,7 @@ DEADLINE_FAST_RESPONSE_TTFT: float = float(os.environ.get("CORTEX_DEADLINE_FAST_
 DEADLINE_FAST_RESPONSE_TOTAL: float = float(os.environ.get("CORTEX_DEADLINE_FAST_RESPONSE_TOTAL", "6.0"))
 
 DEADLINE_STRUCTURED_TTFT: float = float(os.environ.get("CORTEX_DEADLINE_STRUCTURED_TTFT", "4.0"))
-DEADLINE_STRUCTURED_TOTAL: float = float(os.environ.get("CORTEX_DEADLINE_STRUCTURED_TOTAL", "8.0"))
+DEADLINE_STRUCTURED_TOTAL: float = float(os.environ.get("CORTEX_DEADLINE_STRUCTURED_TOTAL", "30.0"))
 
 DEADLINE_TASK_STEP_TTFT: float = float(os.environ.get("CORTEX_DEADLINE_TASK_STEP_TTFT", "5.0"))
 DEADLINE_TASK_STEP_TOTAL: float = float(os.environ.get("CORTEX_DEADLINE_TASK_STEP_TOTAL", "12.0"))

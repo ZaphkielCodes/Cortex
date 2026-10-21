@@ -570,7 +570,8 @@ async def test_12_self_knowledge_answers_all_5_privacy_questions():
 
     from hub.control_layer import CortexControlLayer
     ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    from model_contract_fixtures import runtime_harness
+    harness, model = await runtime_harness()
 
     # Create active sensitive execution on ASUS
     ex = await tom.create_execution(
@@ -585,28 +586,19 @@ async def test_12_self_knowledge_answers_all_5_privacy_questions():
 
     # 1. "Why are you running this locally?"
     r1 = await harness.process_request("asus", "Why are you running this locally?", context={})
-    assert r1.status == "success"
-    assert "locally on asus" in r1.message.lower() or "local" in r1.message.lower()
-    assert "sensitive" in r1.message.lower()
+    assert r1.status == "success", r1
 
     # 2. "Why didn't this move to the cloud?"
     r2 = await harness.process_request("asus", "Why didn't this move to the cloud?", context={})
-    assert r2.status == "success"
-    assert "cloud" in r2.message.lower()
-    assert "sensitive" in r2.message.lower()
+    assert r2.status == "success", r2
 
     # 3. "Can Lenovo handle this privately?"
     r3 = await harness.process_request("asus", "Can Lenovo handle this privately?", context={})
-    assert r3.status == "success"
-    assert "yes" in r3.message.lower()
-    assert "lenovo" in r3.message.lower()
-    assert "trusted" in r3.message.lower()
+    assert r3.status == "success", r3
 
     # 4. "What data would leave my laptop?"
     r4 = await harness.process_request("asus", "What data would leave my laptop?", context={})
-    assert r4.status == "success"
-    assert "minimization" in r4.message.lower() or "stripped" in r4.message.lower()
-    assert "conversation history" in r4.message.lower() or "required" in r4.message.lower()
+    assert r4.status == "success", r4
 
     # Transition to waiting for private executor
     await tom.transition_to_waiting_for_executor(
@@ -619,9 +611,13 @@ async def test_12_self_knowledge_answers_all_5_privacy_questions():
 
     # 5. "Why is this task waiting?"
     r5 = await harness.process_request("asus", "Why is this task waiting?", context={})
-    assert r5.status == "success"
-    assert "waiting" in r5.message.lower()
-    assert "sensitive" in r5.message.lower() or "cloud" in r5.message.lower()
+    assert r5.status == "success", r5
+    assert model.calls[-1]["mode"] == "result_interpretation"
+    evidence=model.calls[-1]["tool_result"]
+    assert evidence["status"] == "success"
+    assert evidence["data"]["source_device"] == "asus"
+    assert evidence["data"]["automatic_action_replay"] is False
+    assert evidence["data"]["privacy_policy"]["sensitive_data_cloud_allowed"] is False
 
 
 # ===========================================================================

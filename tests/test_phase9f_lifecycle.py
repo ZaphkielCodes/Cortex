@@ -69,6 +69,15 @@ def get_free_port() -> int:
 
 
 @pytest.fixture(autouse=True)
+def isolated_runtime_state(tmp_path, monkeypatch):
+    # Lifecycle children and locks must never touch a real user's runtime state.
+    state = tmp_path / "runtime-state"
+    state.mkdir()
+    monkeypatch.setenv("CORTEX_STATE_DIR", str(state))
+    monkeypatch.setattr("hub.supervisor.CORTEX_STATE_DIR", state)
+
+
+@pytest.fixture(autouse=True)
 def ensure_prod_db_isolated():
     """Verify production database is not corrupted or mutated during test."""
     initial_hash = get_file_sha256(PROD_DB)
@@ -82,6 +91,13 @@ def test_env_and_db(tmp_path):
     """Create isolated test DB copy and isolated port numbers."""
     test_db = tmp_path / "test_lifecycle.db"
     shutil.copyfile(PROD_DB, test_db)
+    # Dedicated enrollment for isolated runtime credentials.
+    import sqlite3
+    from hub.auth import hash_secret
+    test_secret = "lifecycle-isolated-test-secret"
+    with sqlite3.connect(test_db) as conn:
+        conn.execute("UPDATE devices SET secret_hash = ? WHERE device_id = ?",
+                     (hash_secret(test_secret), "asus"))
 
     hub_port = get_free_port()
     ipc_port = get_free_port()
@@ -93,6 +109,7 @@ def test_env_and_db(tmp_path):
         "USE_MOCK_VOICE": "1",
         "CORTEX_MOCK_VOICE": "1",
         "CORTEX_DEVICE_ID": "asus",
+        "CORTEX_SECRET": test_secret,
     }
     return test_db, hub_port, ipc_port, env
 
@@ -562,11 +579,21 @@ def test_inactivity_idle_transition():
 # ---------------------------------------------------------------------------
 # 10. Windows Login Startup Registration Test
 # ---------------------------------------------------------------------------
-def test_windows_startup_registration():
+def test_windows_startup_registration(monkeypatch):
     """Test registration and unregistration in Windows user login without admin rights."""
     if platform.system() != "Windows":
         pytest.skip("Windows-only test")
 
+    # Component contract: use a fake registry instead of changing real login settings.
+    from types import SimpleNamespace
+    registered = {"value": False}
+    def registry_call(args, **kwargs):
+        operation = args[1]
+        if operation == "add": registered["value"] = True
+        if operation == "delete": registered["value"] = False
+        return SimpleNamespace(returncode=0 if operation != "query" or registered["value"] else 1,
+            stdout="CortexSupervisor" if registered["value"] else "", stderr="")
+    monkeypatch.setattr("hub.supervisor.subprocess.run", registry_call)
     # Clean initial state
     unregister_windows_startup()
     assert is_windows_startup_registered() is False

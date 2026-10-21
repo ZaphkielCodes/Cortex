@@ -240,7 +240,7 @@ async def test_circuit_breaker_429_immediate_failover():
 
     class FastFallback(LLMProvider):
         @property
-        def name(self): return "fallback_openrouter"
+        def name(self): return "fallback_backup"
         @property
         def model(self): return "openai/gpt-4o-mini"
         async def generate_result(self, user_text, context, on_chunk=None):

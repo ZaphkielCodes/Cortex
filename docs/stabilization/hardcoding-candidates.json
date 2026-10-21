@@ -1,0 +1,716 @@
+[
+  {
+    "file": "hub/agent_harness.py",
+    "line": 23,
+    "function": "sanitize_for_speech",
+    "source": "if (clean.startswith((\"{\", \"[\", \"```\")) or \"Traceback (most recent call last)\" in clean"
+  },
+  {
+    "file": "hub/agent_harness.py",
+    "line": 24,
+    "function": "sanitize_for_speech",
+    "source": "or re.search(r\"\\b(?:KeyError|ValueError|TypeError|AttributeError|FileNotFoundError|Exception):\\s*\", clean)):"
+  },
+  {
+    "file": "hub/browser_navigation.py",
+    "line": 47,
+    "function": "is_valid_url",
+    "source": "if re.match(r\"^[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}(?:/[^\\s]*)?$\", cand):"
+  },
+  {
+    "file": "hub/control_layer.py",
+    "line": 23,
+    "function": "CortexControlLayer.resolve_target_device",
+    "source": "if ref in (\"this device\", \"here\", \"this laptop\", \"my phone\", \"this\", \"this computer\", \"my desktop\", \"current\", \"local\"):"
+  },
+  {
+    "file": "hub/control_layer.py",
+    "line": 619,
+    "function": "CortexControlLayer.execute_and_observe",
+    "source": "elif \"Screenshot saved: \" in msg_str:"
+  },
+  {
+    "file": "hub/control_layer.py",
+    "line": 621,
+    "function": "CortexControlLayer.execute_and_observe",
+    "source": "elif \"Screenshot taken: \" in msg_str:"
+  },
+  {
+    "file": "hub/file_transfer.py",
+    "line": 1407,
+    "function": "FileTransferManager.answer_self_knowledge_query",
+    "source": "if \"where is\" in q and (\"file\" in q or \"document\" in q or \"report\" in q):"
+  },
+  {
+    "file": "hub/file_transfer.py",
+    "line": 1444,
+    "function": "FileTransferManager.answer_self_knowledge_query",
+    "source": "if \"still transferring\" in q or (\"is it\" in q and \"transferring\" in q):"
+  },
+  {
+    "file": "hub/file_transfer.py",
+    "line": 1472,
+    "function": "FileTransferManager.answer_self_knowledge_query",
+    "source": "if \"how much\" in q and (\"left\" in q or \"remaining\" in q):"
+  },
+  {
+    "file": "hub/file_transfer.py",
+    "line": 1509,
+    "function": "FileTransferManager.answer_self_knowledge_query",
+    "source": "if \"can this resume\" in q or \"can it resume\" in q or \"is it resumable\" in q:"
+  },
+  {
+    "file": "hub/file_transfer.py",
+    "line": 1509,
+    "function": "FileTransferManager.answer_self_knowledge_query",
+    "source": "if \"can this resume\" in q or \"can it resume\" in q or \"is it resumable\" in q:"
+  },
+  {
+    "file": "hub/file_transfer.py",
+    "line": 1509,
+    "function": "FileTransferManager.answer_self_knowledge_query",
+    "source": "if \"can this resume\" in q or \"can it resume\" in q or \"is it resumable\" in q:"
+  },
+  {
+    "file": "hub/file_transfer.py",
+    "line": 1444,
+    "function": "FileTransferManager.answer_self_knowledge_query",
+    "source": "if \"still transferring\" in q or (\"is it\" in q and \"transferring\" in q):"
+  },
+  {
+    "file": "hub/file_transfer.py",
+    "line": 1494,
+    "function": "FileTransferManager.answer_self_knowledge_query",
+    "source": "if (\"which transport\" in q or \"what transport\" in q) or (\"transport\" in q and \"using\" in q):"
+  },
+  {
+    "file": "hub/file_transfer.py",
+    "line": 1494,
+    "function": "FileTransferManager.answer_self_knowledge_query",
+    "source": "if (\"which transport\" in q or \"what transport\" in q) or (\"transport\" in q and \"using\" in q):"
+  },
+  {
+    "file": "hub/file_transfer.py",
+    "line": 1525,
+    "function": "FileTransferManager.answer_self_knowledge_query",
+    "source": "if \"lenovo\" in q and (\"receive\" in q or \"got it\" in q or \"have it\" in q):"
+  },
+  {
+    "file": "hub/file_transfer.py",
+    "line": 1525,
+    "function": "FileTransferManager.answer_self_knowledge_query",
+    "source": "if \"lenovo\" in q and (\"receive\" in q or \"got it\" in q or \"have it\" in q):"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1156,
+    "function": "GoalManager.handle_natural_language",
+    "source": "if re.search(r'\\b(?:stop\\s+all\\s+autonomous\\s+tasks|stop\\s+autonomy|kill\\s+switch|disable\\s+autonomy|emergency\\s+stop)\\b', clean):"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1162,
+    "function": "GoalManager.handle_natural_language",
+    "source": "if re.search(r'\\b(?:enable\\s+autonomous\\s+execution|enable\\s+autonomy|start\\s+autonomy)\\b', clean):"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1167,
+    "function": "GoalManager.handle_natural_language",
+    "source": "if re.search(r'\\b(?:is\\s+autonomous\\s+execution\\s+enabled|is\\s+autonomy\\s+enabled|autonomy\\s+status|check\\s+autonomy)\\b', clean):"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1173,
+    "function": "GoalManager.handle_natural_language",
+    "source": "if re.search(r'\\b(?:pause\\s+all\\s+(?:my\\s+)?goals|pause\\s+all\\s+goals|pause\\s+goals)\\b', clean):"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1180,
+    "function": "GoalManager.handle_natural_language",
+    "source": "if re.search(r'\\b(?:resume\\s+(?:all\\s+)?(?:my\\s+)?paused\\s+goals|resume\\s+all\\s+goals)\\b', clean):"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1187,
+    "function": "GoalManager.handle_natural_language",
+    "source": "m_create_run = re.search(r'\\b(?:create\\s+and\\s+run|plan\\s+and\\s+run|create\\s+and\\s+execute)\\s+(?:a\\s+)?goal\\s+(?:to\\s+|for\\s+)?(.+)', req, re.IGNORECASE)"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1205,
+    "function": "GoalManager.handle_natural_language",
+    "source": "m_create = re.search(r'\\b(?:create|add|start|set\\s+up|new)\\s+(?:a\\s+)?goal\\s+(?:to\\s+|for\\s+)?(.+)', req, re.IGNORECASE)"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1215,
+    "function": "GoalManager.handle_natural_language",
+    "source": "if re.search(r'\\b(?:what\\s+goals\\s+are\\s+active|what\\s+are\\s+my\\s+active\\s+goals|active\\s+goals|list\\s+(?:active\\s+)?goals|show\\s+(?:active\\s+)?goals|what\\s+goals\\s+do\\s+i\\s+have)\\b', clean):"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1232,
+    "function": "GoalManager.handle_natural_language",
+    "source": "m_cancel = re.search(r'^(?:please\\s+)?(?:cancel|pause|abort)\\s+(?:the\\s+|my\\s+|that\\s+)?(.+?)(?:\\s+goal)?$', clean)"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1246,
+    "function": "GoalManager.handle_natural_language",
+    "source": "m_resume = re.search(r'^(?:please\\s+)?resume\\s+(?:the\\s+|my\\s+|that\\s+)?(.+?)(?:\\s+goal)?$', clean)"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1260,
+    "function": "GoalManager.handle_natural_language",
+    "source": "m_run = re.search(r'^(?:please\\s+)?run\\s+(?:the\\s+|my\\s+|that\\s+)?(.+?)(?:\\s+goal)?$', clean)"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1301,
+    "function": "GoalManager._find_matching_goal",
+    "source": "if q in (\"that\", \"it\", \"this\", \"the goal\", \"goal\"):"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 332,
+    "function": "GoalManager.resume_all_goals",
+    "source": "is_user_paused = g.metadata.get(\"user_paused\") is True or g.waiting_reason in (\"Paused by user\", \"Autonomy stopped by user\")"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1233,
+    "function": "GoalManager.handle_natural_language",
+    "source": "if m_cancel and not re.search(r'\\b(?:create|add|what|list|resume)\\b', clean):"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1261,
+    "function": "GoalManager.handle_natural_language",
+    "source": "if m_run and not re.search(r'\\b(?:create|add|what|list|cancel|pause|resume|action)\\b', clean):"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1418,
+    "function": "GoalRunner.run_goal",
+    "source": "if (goal.metadata or {}).get(\"user_paused\") or goal.waiting_reason in (\"Paused by user\", \"Autonomy stopped by user\"):"
+  },
+  {
+    "file": "hub/goals.py",
+    "line": 1693,
+    "function": "GoalRunner.run_next_step",
+    "source": "if re.match(r'^[a-zA-Z]:[\\\\/]', v) or v.startswith((\"/\", \"\\\\\")):"
+  },
+  {
+    "file": "hub/llm_provider.py",
+    "line": 425,
+    "function": "classify_failure",
+    "source": "if isinstance(e, TimeoutError) or \"timeout\" in err_str or \"time out\" in err_str or \"deadline\" in err_str:"
+  },
+  {
+    "file": "hub/main.py",
+    "line": 908,
+    "function": "agent_endpoint",
+    "source": "if (msg.command in (\"screen.capture\", \"take_screenshot\") or \"screenshot\" in msg.command.lower() or \"Screenshot saved: \" in msg.message or \"Screenshot taken: \" in msg.message) and msg.status == \"success\":"
+  },
+  {
+    "file": "hub/main.py",
+    "line": 908,
+    "function": "agent_endpoint",
+    "source": "if (msg.command in (\"screen.capture\", \"take_screenshot\") or \"screenshot\" in msg.command.lower() or \"Screenshot saved: \" in msg.message or \"Screenshot taken: \" in msg.message) and msg.status == \"success\":"
+  },
+  {
+    "file": "hub/main.py",
+    "line": 912,
+    "function": "agent_endpoint",
+    "source": "elif \"Screenshot saved: \" in msg.message:"
+  },
+  {
+    "file": "hub/main.py",
+    "line": 914,
+    "function": "agent_endpoint",
+    "source": "elif \"Screenshot taken: \" in msg.message:"
+  },
+  {
+    "file": "hub/privacy.py",
+    "line": 1009,
+    "function": "PrivacyPolicyEngine.answer_privacy_query",
+    "source": "if \"why is\" in q and \"waiting\" in q:"
+  },
+  {
+    "file": "hub/privacy.py",
+    "line": 271,
+    "function": "classify_task_privacy",
+    "source": "if re.match(r'^[a-zA-Z]:[\\\\/]', v) or v.startswith((\"/\", \"\\\\\")):"
+  },
+  {
+    "file": "hub/privacy.py",
+    "line": 941,
+    "function": "PrivacyPolicyEngine.answer_privacy_query",
+    "source": "if (\"why didn't\" in q or \"why did not\" in q or \"why not\") and \"cloud\" in q:"
+  },
+  {
+    "file": "hub/privacy.py",
+    "line": 941,
+    "function": "PrivacyPolicyEngine.answer_privacy_query",
+    "source": "if (\"why didn't\" in q or \"why did not\" in q or \"why not\") and \"cloud\" in q:"
+  },
+  {
+    "file": "hub/privacy.py",
+    "line": 983,
+    "function": "PrivacyPolicyEngine.answer_privacy_query",
+    "source": "if (\"what data\" in q or \"what leaves\" in q) and (\"leave\" in q or \"sent\" in q or \"transmitted\" in q):"
+  },
+  {
+    "file": "hub/privacy.py",
+    "line": 983,
+    "function": "PrivacyPolicyEngine.answer_privacy_query",
+    "source": "if (\"what data\" in q or \"what leaves\" in q) and (\"leave\" in q or \"sent\" in q or \"transmitted\" in q):"
+  },
+  {
+    "file": "hub/routines.py",
+    "line": 120,
+    "function": "categorize_event",
+    "source": "if re.search(r'\\b(?:class|lecture|recitation|lab|seminar)\\b', clean):"
+  },
+  {
+    "file": "hub/routines.py",
+    "line": 124,
+    "function": "categorize_event",
+    "source": "if re.search(r'\\b(?:study|homework|hw|review|reading|assignment|prep|library)\\b', clean):"
+  },
+  {
+    "file": "hub/routines.py",
+    "line": 128,
+    "function": "categorize_event",
+    "source": "if re.search(r'\\b(?:work|shift|office|desk|job|duty|meeting)\\b', clean):"
+  },
+  {
+    "file": "hub/routines.py",
+    "line": 132,
+    "function": "categorize_event",
+    "source": "if re.search(r'\\b(?:device|usage|laptop|workstation|screen)\\b', clean):"
+  },
+  {
+    "file": "hub/routines.py",
+    "line": 526,
+    "function": "RoutineManager.handle_natural_language",
+    "source": "m_day = re.search("
+  },
+  {
+    "file": "hub/routines.py",
+    "line": 535,
+    "function": "RoutineManager.handle_natural_language",
+    "source": "if re.search(r'\\bwhen\\s+do\\s+i\\s+(?:usually|normally|typically)\\s+work\\b', clean):"
+  },
+  {
+    "file": "hub/routines.py",
+    "line": 539,
+    "function": "RoutineManager.handle_natural_language",
+    "source": "m_free = re.search("
+  },
+  {
+    "file": "hub/routines.py",
+    "line": 548,
+    "function": "RoutineManager.handle_natural_language",
+    "source": "if re.search("
+  },
+  {
+    "file": "hub/routines.py",
+    "line": 233,
+    "function": "RoutineManager.learn_from_calendar_events",
+    "source": "if not title or title.lower() in (\"(no title)\", \"busy\", \"untitled\"):"
+  },
+  {
+    "file": "hub/session_context.py",
+    "line": 243,
+    "function": "SessionContextManager._update_session",
+    "source": "if _re.search(r'\\bnext\\s+event\\b|\\bnext\\s+meeting\\b|\\bupcoming\\s+event\\b', _clean_req):"
+  },
+  {
+    "file": "hub/session_context.py",
+    "line": 220,
+    "function": "SessionContextManager._update_session",
+    "source": "if \"Screenshot saved: \" in resp_msg:"
+  },
+  {
+    "file": "hub/session_context.py",
+    "line": 245,
+    "function": "SessionContextManager._update_session",
+    "source": "elif _re.search(r'\\btomorrow\\b', _clean_req):"
+  },
+  {
+    "file": "hub/session_context.py",
+    "line": 224,
+    "function": "SessionContextManager._update_session",
+    "source": "elif \"Screenshot taken: \" in resp_msg:"
+  },
+  {
+    "file": "hub/session_context.py",
+    "line": 247,
+    "function": "SessionContextManager._update_session",
+    "source": "elif _re.search(r'\\bday\\s+after\\s+tomorrow\\b', _clean_req):"
+  },
+  {
+    "file": "hub/session_context.py",
+    "line": 249,
+    "function": "SessionContextManager._update_session",
+    "source": "elif _re.search(r'\\btoday\\b|\\bright\\s+now\\b|\\bat\\s+the\\s+moment\\b', _clean_req):"
+  },
+  {
+    "file": "hub/session_context.py",
+    "line": 255,
+    "function": "SessionContextManager._update_session",
+    "source": "elif session[\"references\"].get(\"last_calendar_topic\") and not _re.search("
+  },
+  {
+    "file": "hub/session_context.py",
+    "line": 251,
+    "function": "SessionContextManager._update_session",
+    "source": "elif _re.search(r'\\bcalendar\\b|\\bschedule\\b|\\bagenda\\b|\\bmeeting\\b|\\bevent\\b', _clean_req):"
+  },
+  {
+    "file": "hub/social.py",
+    "line": 83,
+    "function": "get_tone_guidance",
+    "source": "if rel in (\"friend\", \"best friend\", \"buddy\", \"roommate\"):"
+  },
+  {
+    "file": "hub/social.py",
+    "line": 164,
+    "function": "SocialContextManager.build_social_context",
+    "source": "m_dislike = re.search(r\"\\b(?:i don't like|i dislike|i hate|no|allergic to)\\s+([a-zA-Z\\s]+)\", t_req, re.IGNORECASE)"
+  },
+  {
+    "file": "hub/speakers.py",
+    "line": 141,
+    "function": "SpeakerManager.resolve_speaker",
+    "source": "if not hint_clean or hint_lower in (\"primary\", \"me\", \"primary user\", \"user\", \"owner\", \"admin\"):"
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 138,
+    "function": "TargetResolver.ground_reference",
+    "source": "if ref_lower in ("
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 175,
+    "function": "TargetResolver.ground_reference",
+    "source": "if ref_lower in ("
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 620,
+    "function": "TargetResolver.resolve",
+    "source": "m_on = re.search(r\"\\b(?:on|in)\\s+([a-zA-Z0-9_-]+)$\", text, re.IGNORECASE)"
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 283,
+    "function": "TargetResolver.resolve",
+    "source": "if any(w in lower for w in (\"clean up\", \"cleanup\", \"clean my\", \"clean the\", \"organize my\", \"organize the\")) or (\"keep \" in lower and (\"remove \" in lower or \"delete \" in lower)):"
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 488,
+    "function": "TargetResolver.resolve",
+    "source": "if t_clean in ("
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 283,
+    "function": "TargetResolver.resolve",
+    "source": "if any(w in lower for w in (\"clean up\", \"cleanup\", \"clean my\", \"clean the\", \"organize my\", \"organize the\")) or (\"keep \" in lower and (\"remove \" in lower or \"delete \" in lower)):"
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 283,
+    "function": "TargetResolver.resolve",
+    "source": "if any(w in lower for w in (\"clean up\", \"cleanup\", \"clean my\", \"clean the\", \"organize my\", \"organize the\")) or (\"keep \" in lower and (\"remove \" in lower or \"delete \" in lower)):"
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 356,
+    "function": "TargetResolver.resolve",
+    "source": "m_win_act = re.search("
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 515,
+    "function": "TargetResolver.resolve",
+    "source": "elif target_name and target_name.lower() in (\"it\", \"that\", \"this\", \"the app\", \"the window\", \"that app\"):"
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 367,
+    "function": "TargetResolver.resolve",
+    "source": "elif lower in (\"close it\", \"close that\", \"switch back to it\", \"switch to it\", \"focus it\"):"
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 372,
+    "function": "TargetResolver.resolve",
+    "source": "m_copy = re.search(r\"copy\\s+['\\\"]?([^'\\\",\\n]+?)['\\\"]?\\s+to\\s+['\\\"]?([^'\\\",\\n]+?)['\\\"]?$\", text, re.IGNORECASE)"
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 378,
+    "function": "TargetResolver.resolve",
+    "source": "m_rename = re.search(r\"rename\\s+['\\\"]?([^'\\\",\\n]+?)['\\\"]?\\s+to\\s+['\\\"]?([^'\\\",\\n]+?)['\\\"]?$\", text, re.IGNORECASE)"
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 383,
+    "function": "TargetResolver.resolve",
+    "source": "m_move = re.search(r\"move\\s+['\\\"]?([^'\\\",\\n]+?)['\\\"]?\\s+to\\s+['\\\"]?([^'\\\",\\n]+?)['\\\"]?$\", text, re.IGNORECASE)"
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 389,
+    "function": "TargetResolver.resolve",
+    "source": "m_named = re.search("
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 399,
+    "function": "TargetResolver.resolve",
+    "source": "m_action_from = re.search("
+  },
+  {
+    "file": "hub/target_resolver.py",
+    "line": 413,
+    "function": "TargetResolver.resolve",
+    "source": "m_simple = re.search("
+  },
+  {
+    "file": "hub/task_ownership.py",
+    "line": 1446,
+    "function": "TaskOwnershipManager.answer_self_knowledge_query",
+    "source": "if \"where is\" in q and \"running\" in q:"
+  },
+  {
+    "file": "hub/task_ownership.py",
+    "line": 1469,
+    "function": "TaskOwnershipManager.answer_self_knowledge_query",
+    "source": "if \"why did\" in q and \"move to\" in q:"
+  },
+  {
+    "file": "hub/task_ownership.py",
+    "line": 1469,
+    "function": "TaskOwnershipManager.answer_self_knowledge_query",
+    "source": "if \"why did\" in q and \"move to\" in q:"
+  },
+  {
+    "file": "hub/task_ownership.py",
+    "line": 1490,
+    "function": "TaskOwnershipManager.answer_self_knowledge_query",
+    "source": "if \"why is\" in q and \"waiting\" in q:"
+  },
+  {
+    "file": "hub/task_ownership.py",
+    "line": 1506,
+    "function": "TaskOwnershipManager.answer_self_knowledge_query",
+    "source": "if (\"will it continue\" in q or \"will it resume\" in q) and (\"back\" in q or \"online\" in q or \"reconnect\" in q):"
+  },
+  {
+    "file": "hub/task_ownership.py",
+    "line": 1506,
+    "function": "TaskOwnershipManager.answer_self_knowledge_query",
+    "source": "if (\"will it continue\" in q or \"will it resume\" in q) and (\"back\" in q or \"online\" in q or \"reconnect\" in q):"
+  },
+  {
+    "file": "hub/task_ownership.py",
+    "line": 1521,
+    "function": "TaskOwnershipManager.answer_self_knowledge_query",
+    "source": "if (\"which device\" in q or \"who owns\" in q) and \"owns\" in q:"
+  },
+  {
+    "file": "hub/task_ownership.py",
+    "line": 1521,
+    "function": "TaskOwnershipManager.answer_self_knowledge_query",
+    "source": "if (\"which device\" in q or \"who owns\" in q) and \"owns\" in q:"
+  },
+  {
+    "file": "hub/web_fetch.py",
+    "line": 72,
+    "function": "clean_html_content",
+    "source": "title_match = re.search(r\"<title[^>]*>(.*?)</title>\", html_text, re.IGNORECASE | re.DOTALL)"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 1024,
+    "function": "parse_relative_due_date",
+    "source": "m_rel = re.search(r'\\bin\\s+(\\d+|one|two|three|four|five|ten)\\s+(minute|hour|day)s?\\b', clean)"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 1092,
+    "function": "extract_effort_minutes",
+    "source": "m_effort = re.search("
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 818,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "m_done = re.search(r'\\b(?:i\\s+)?(?:finished|completed|done\\s+with)\\s+(?:the\\s+)?([A-Za-z0-9_\\-\\s]+?)(?:\\s+assignment|\\s+project|\\s+task|\\s+exam|\\s+quiz|\\s+reading)?$', clean)"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 827,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "m_start = re.search(r'\\b(?:i\\s+)?(?:started|working\\s+on)\\s+(?:the\\s+)?([A-Za-z0-9_\\-\\s]+?)(?:\\s+assignment|\\s+project|\\s+task|\\s+reading)?$', clean)"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 836,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "m_eff_update = re.search(r'\\b(?:that|the|this)\\s+(?:assignment|project|task|reading|exam)?\\s*(?:should\\s+)?(?:take|takes|is\\s+about)\\s+(?:about\\s+)?(\\d+|one|two|three|four|five|six|ninety)\\s+(minute|hour)s?', clean)"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 856,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "m_entry = re.search("
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 892,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "if re.search(r'\\b(?:what\\s+should\\s+i\\s+work\\s+on\\s+first|what\\s+to\\s+do\\s+first|prioritize(?:\\s+my)?\\s+(?:work|tasks|assignments)?|highest\\s+priority\\s+task)\\b', clean):"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 908,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "if re.search(r'\\b(?:what\\s+(?:do\\s+i\\s+have|is)\\s+due|what\\s+do\\s+i\\s+have\\s+left|list\\s+(?:my\\s+)?(?:assignments|tasks|obligations|work))\\b', clean):"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 922,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "if re.search(r'\\bwhat(?:\\'s|\\s+is)\\s+due\\s+tomorrow\\b', clean):"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 934,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "if re.search(r'\\b(?:am\\s+i\\s+behind\\s+on\\s+anything|any\\s+overdue\\s+tasks|what\\s+is\\s+overdue)\\b', clean):"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 944,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "if re.search(r'\\b(?:what(?:\\'s|\\s+is)\\s+my\\s+next\\s+deadline|next\\s+deadline)\\b', clean):"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 959,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "if re.search(r'\\bhow\\s+much\\s+work\\s+do\\s+i\\s+have\\s+(?:tonight|today)\\b', clean):"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 970,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "m_enough = re.search(r'\\bdo\\s+i\\s+have\\s+enough\\s+time\\s+to\\s+finish\\s+([A-Za-z0-9_\\-\\s]+?)\\s+before\\s+([A-Za-z0-9_\\-\\s]+?)\\??$', clean)"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 987,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "m_done_before = re.search(r'\\bhow\\s+much\\s+work\\s+can\\s+i\\s+get\\s+done\\s+before\\s+([A-Za-z0-9_\\-\\s]+?)\\??$', clean)"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 996,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "m_due_before = re.search(r'\\bwhat(?:\\'s|\\s+is)\\s+due\\s+before\\s+(?:my\\s+)?next\\s+([A-Za-z0-9_\\-\\s]+?)\\??$', clean)"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 1040,
+    "function": "parse_relative_due_date",
+    "source": "m_time = re.search(r'at\\s+(\\d+)(?::(\\d+))?\\s*(pm|am)?', clean)"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 1054,
+    "function": "parse_relative_due_date",
+    "source": "m_time = re.search(r'at\\s+(\\d+)(?::(\\d+))?\\s*(pm|am)?', clean)"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 1074,
+    "function": "parse_relative_due_date",
+    "source": "m_time = re.search(r'at\\s+(\\d+)(?::(\\d+))?\\s*(pm|am)?', clean)"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 819,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "if m_done and not re.search(r'\\b(?:what|when|can|how|will)\\b', clean):"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 828,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "if m_start and not re.search(r'\\b(?:what|when|can|how|will)\\b', clean):"
+  },
+  {
+    "file": "hub/workload.py",
+    "line": 837,
+    "function": "WorkloadManager.handle_natural_language",
+    "source": "if m_eff_update and not (\"i have\" in clean or \"my\" in clean and \"due\" in clean):"
+  },
+  {
+    "file": "hub/world_state.py",
+    "line": 1079,
+    "function": "ActivitySignalAdapter.inspect_windows_foreground",
+    "source": "app_name = title.split(\" - \")[-1] if \" - \" in title else title"
+  },
+  {
+    "file": "hub/pipeline/deterministic_router.py",
+    "line": 105,
+    "function": "DeterministicSafetyRouter.route",
+    "source": "if clean in (\"stop\", \"cortex stop\", \"stop cortex\", \"stop listening\"):"
+  },
+  {
+    "file": "hub/pipeline/deterministic_router.py",
+    "line": 111,
+    "function": "DeterministicSafetyRouter.route",
+    "source": "if clean in (\"stop all actions\", \"emergency stop\", \"kill switch\", \"abort all tasks\", \"cancel all\"):"
+  },
+  {
+    "file": "agent/desktop_actions.py",
+    "line": 99,
+    "function": "list_running_apps",
+    "source": "if pid <= 4 and name.lower() in (\"system idle process\", \"system\"):"
+  },
+  {
+    "file": "agent/desktop_actions.py",
+    "line": 157,
+    "function": "list_processes",
+    "source": "if pid <= 4 and name.lower() in (\"system idle process\", \"system\"):"
+  },
+  {
+    "file": "agent/ui_grounder.py",
+    "line": 263,
+    "function": "UIElementGrounder._ground_selector_string",
+    "source": "m = re.match(r\"^(\\w+)\\s*\\[(?:label\\s*=\\s*['\\\"]?)?([^'\\\"\\]]+)['\\\"]?\\]$\", selector.strip(), re.IGNORECASE)"
+  },
+  {
+    "file": "agent/ui_grounder.py",
+    "line": 325,
+    "function": "UIElementGrounder._ground_spatial_relative",
+    "source": "anchor_match = re.search(r\"(?:under|below|beneath)\\s+(?:the\\s+)?([a-zA-Z0-9_\\-\\s]+)\", text_lower)"
+  },
+  {
+    "file": "agent/ui_grounder.py",
+    "line": 336,
+    "function": "UIElementGrounder._ground_spatial_relative",
+    "source": "or (anchor_query in (\"search box\", \"search bar\") and e.role in (\"input\", \"edit\"))"
+  }
+]

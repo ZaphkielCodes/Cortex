@@ -146,6 +146,7 @@ class TaskPrivacyContext:
 
 # Capability baseline privacy mapping
 CAPABILITY_BASELINE_PRIVACY: Dict[str, str] = {
+    "system.runtime_state": PrivacyClass.SENSITIVE,
     # Public capabilities
     "web.search": PrivacyClass.PUBLIC,
     "web.scrape_page": PrivacyClass.PUBLIC,
@@ -156,11 +157,11 @@ CAPABILITY_BASELINE_PRIVACY: Dict[str, str] = {
     # Internal system & telemetry
     "device.status": PrivacyClass.INTERNAL,
     "device.info": PrivacyClass.INTERNAL,
-    "app.list_running": PrivacyClass.INTERNAL,
-    "process.list": PrivacyClass.INTERNAL,
+    "app.list_running": PrivacyClass.SENSITIVE,
+    "process.list": PrivacyClass.SENSITIVE,
     "app.launch": PrivacyClass.INTERNAL,
     "app.close": PrivacyClass.INTERNAL,
-    "window.list": PrivacyClass.INTERNAL,
+    "window.list": PrivacyClass.SENSITIVE,
     "window.focus": PrivacyClass.INTERNAL,
     "goal.wait": PrivacyClass.INTERNAL,
     "wait": PrivacyClass.INTERNAL,
@@ -238,6 +239,10 @@ def classify_task_privacy(
     # 1. Base classification from capability
     cap_clean = capability.strip().lower()
     base_class = CAPABILITY_BASELINE_PRIVACY.get(cap_clean, PrivacyClass.INTERNAL)
+    from .integrations.ecosystem import IntegrationRegistry
+    integration = IntegrationRegistry.get_instance().get(cap_clean)
+    if integration:
+        base_class = integration.data_class
     reasons.append(f"Baseline capability '{cap_clean}' -> {base_class}")
 
     # 2. Planner annotations or explicit overrides

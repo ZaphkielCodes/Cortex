@@ -264,7 +264,7 @@ class TaskExecution:
             task_execution_id=data["task_execution_id"],
             goal_id=data["goal_id"],
             owner_device_id=data.get("owner_device_id", "cortex"),
-            executor_device_id=data.get("executor_device_id", "asus"),
+            executor_device_id=data.get("executor_device_id", ""),
             lease_id=data.get("lease_id", ""),
             lease_acquired_at=data.get("lease_acquired_at", ""),
             lease_expires_at=data.get("lease_expires_at", ""),

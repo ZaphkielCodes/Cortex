@@ -84,10 +84,7 @@ export function createControlClient(onVoiceState, onAudioLevel) {
   };
 }
 
-export function taskResult(task) {
-  try { return (typeof task.context === "string" ? JSON.parse(task.context) : task.context)?.result || null; }
-  catch { return null; }
-}
+export { taskResult } from "./task-sync.js";
 
 export function humanStatus(value) {
   return String(value || "unknown").replaceAll("_", " ").toLowerCase();

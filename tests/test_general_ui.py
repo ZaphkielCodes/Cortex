@@ -1,5 +1,6 @@
 """Generic UI behavior with simulated OS/model boundaries; no physical input."""
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, AsyncMock
 
@@ -13,11 +14,17 @@ from agent.ui_verifier import UIActionVerifier
 from hub.agent_turn import AgentTurn
 from hub.computer_use_controller import ComputerUseTaskController
 from hub.pipeline.pipeline import RequestPipeline
-from test_agent_turn_runtime import ScriptedModel, call, control
+from test_agent_turn_runtime import ScriptedModel, call, control, ui_condition, cap_condition
+
+
+def typed_call(capability, **arguments):
+    # Explicit fixture goal: exactly this draft in the known Composer field.
+    assert capability == "ui.type"
+    return dict(call(capability, **arguments), success_condition=ui_condition("Composer",arguments["text"]))
 
 
 def scene(app='UnknownApp', role='input', text='', obs_id='before', **metadata):
-    return UIObservation(observation_id=obs_id, device_id='asus', timestamp='2026-10-17T00:00:00+00:00',
+    return UIObservation(observation_id=obs_id, device_id='asus', timestamp=datetime.now(timezone.utc).isoformat(),
         foreground_app=app, window_title=app, window_id=42, screen_size={'width': 1000, 'height': 800},
         summary='Observed interface', elements=[UIElement(element_id='el_1', role=role,
             label='Composer', text=text, bounds=[50, 50, 400, 100],
@@ -145,12 +152,13 @@ async def test_model_observe_type_observe_respond_without_scenario_plan(monkeypa
                     {'status': 'success', 'data': {'input_attempted': True}},
                     {'status': 'success', 'data': after.to_dict()}])
     model = ScriptedModel([call('ui.observe', include_vision=False),
-        call('ui.type', target='el_1', text='Draft: hello!', observation_id='before'),
+        typed_call('ui.type', target='el_1', text='Draft: hello!', observation_id='before'),
         call('ui.observe', include_vision=False), {'decision': 'RESPOND', 'response_text': 'The draft is in the field.'}])
     result = await RequestPipeline(ctrl, model).execute('asus', 'Put my draft in that field, leaving it unsent.', {}, 'request-123')
     assert result.status == 'success', result
     assert [c.args[1] for c in ctrl.execute_and_observe.await_args_list] == ['ui.observe', 'ui.type', 'ui.observe']
-    assert '"text_entry_verified": true' in model.calls[-1][1]['system_prompt']
+    sent_state = json.loads(model.calls[-1][1]['system_prompt'].split('\nSTATE:\n', 1)[1])
+    assert sent_state['tool_results'][-1]['result']['text_entry_verified'] is True
     from hub.database import get_tasks
     saved = json.loads((await get_tasks())[0]['context'])
     assert saved['request_id'] == 'request-123'
@@ -163,8 +171,8 @@ async def test_missing_target_can_reobserve_without_typing_elsewhere(monkeypatch
     ctrl = control([{'status': 'success', 'data': before.to_dict()},
                     {'status': 'success', 'data': before.to_dict()},
                     {'status': 'success'}, {'status': 'success', 'data': after.to_dict()}])
-    model = ScriptedModel([call('ui.observe'), call('ui.type', target='missing', text='hello', observation_id='before'),
-        call('ui.observe'), call('ui.type', target='el_1', text='hello', observation_id='before'),
+    model = ScriptedModel([call('ui.observe'), typed_call('ui.type', target='missing', text='hello', observation_id='before'),
+        call('ui.observe'), typed_call('ui.type', target='el_1', text='hello', observation_id='before'),
         call('ui.observe'), {'decision': 'RESPOND', 'response_text': 'Entered the draft.'}])
     result = await RequestPipeline(ctrl, model).execute('asus', 'Draft hello in the composer.', {})
     assert result.status == 'success', result
@@ -173,15 +181,19 @@ async def test_missing_target_can_reobserve_without_typing_elsewhere(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('next_decision', [{'decision': 'RESPOND', 'response_text': 'Done'},
-    call('ui.keypress', key='enter', observation_id='after')])
+    dict(call('ui.keypress', key='enter', observation_id='after'),
+         success_condition=[{'source':'ui','selector':{'label':'Composer'},'path':['text'],'operator':'equals','value':'hello'}],
+         expected_effect=[{'source':'ui','selector':{'label':'Composer'},'operator':'absent'}])])
 async def test_unverified_typing_blocks_false_success_and_submission(next_decision):
     ctrl = control([{'status': 'success', 'data': scene().to_dict()}, {'status': 'success'},
-                    {'status': 'success', 'data': scene(obs_id='after').to_dict()}])
-    model = ScriptedModel([call('ui.observe'), call('ui.type', target='el_1', text='hello', observation_id='before'),
-                           call('ui.observe'), next_decision])
+                    {'status': 'success', 'data': scene(obs_id='after').to_dict()},
+                    *[{'status':'success','data':scene(obs_id='readback_'+str(i)).to_dict()} for i in range(3)]])
+    model = ScriptedModel([call('ui.observe'), typed_call('ui.type', target='el_1', text='hello', observation_id='before'),
+                           call('ui.observe'), *[next_decision]*4])
     result = await AgentTurn(ctrl, model).run('Draft hello', 'asus', {})
     assert result.status == 'error'
-    assert ctrl.execute_and_observe.await_count == 3
+    assert sum(c.args[1]=='ui.type' for c in ctrl.execute_and_observe.await_args_list)==1
+    assert all(c.args[1] in {'ui.observe','ui.type'} for c in ctrl.execute_and_observe.await_args_list)
 
 
 @pytest.mark.asyncio
@@ -240,6 +252,7 @@ def test_live_focus_uses_control_identity_and_rejects_changed_window(monkeypatch
     observer._uia_client = SimpleNamespace(ElementFromHandle=lambda _: SimpleNamespace(FindAll=lambda *a: collection),
         CreateTrueCondition=lambda: None, GetFocusedElement=lambda: item)
     monkeypatch.setattr(observer, '_element_snapshot', lambda *args: before.elements[0])
+    monkeypatch.setattr(observer, '_extract_accessibility_elements', lambda *args: before.elements)
     monkeypatch.setattr(observer, '_get_active_window_info', lambda: {'window_id': 99})
     assert not observer.focus_text_target(before, before.elements[0])
     assert focus == []
@@ -267,6 +280,8 @@ def test_uia_client_is_not_reused_across_threads():
 @pytest.mark.asyncio
 async def test_real_dispatch_control_and_executor_keep_typing_evidence(input_boundary, monkeypatch):
     from hub.control_layer import CortexControlLayer
+    monkeypatch.setenv("CORTEX_ENABLE_HUB_DESKTOP", "1")
+    monkeypatch.setenv("CORTEX_HUB_DEVICE_ID", "asus")
     observer, executor = input_boundary
     monkeypatch.setattr(UIActionExecutor, '_instance', executor)
     observations = iter([scene('UnseenComposer'), scene('UnseenComposer', text='hello', obs_id='after')])
@@ -277,7 +292,7 @@ async def test_real_dispatch_control_and_executor_keep_typing_evidence(input_bou
     monkeypatch.setattr('agent.ui_observer.observe_ui_sync', observe)
     ctrl = control([])
     ctrl.execute_and_observe = CortexControlLayer().execute_and_observe
-    model = ScriptedModel([call('ui.observe'), call('ui.type', target='el_1', text='hello', observation_id='before'),
+    model = ScriptedModel([call('ui.observe'), typed_call('ui.type', target='el_1', text='hello', observation_id='before'),
         call('ui.observe'), {'decision': 'RESPOND', 'response_text': 'Draft entered.'}])
     result = await AgentTurn(ctrl, model).run('Draft hello', 'asus', {})
     assert result.status == 'success', result
@@ -308,7 +323,8 @@ async def test_remote_result_preserves_recoverable_failure_code():
 async def test_intermediate_native_capability_can_continue_without_recipe():
     ctrl = control([{'status': 'success', 'data': {'opened': True}},
                     {'status': 'success', 'data': scene().to_dict()}])
-    initial = dict(call('app.launch', app='Invented Editor'), continue_after_result=True)
+    initial = dict(call('app.launch', app='Invented Editor'), continue_after_result=True,
+                   success_condition=cap_condition("app.launch","opened",True))
     model = ScriptedModel([initial, call('ui.observe'), {'decision': 'ASK_CLARIFICATION',
         'response_text': 'Which field should I use?'}])
     result = await AgentTurn(ctrl, model).run('Open my editor and prepare a draft', 'asus', {})
@@ -320,9 +336,11 @@ async def test_intermediate_native_capability_can_continue_without_recipe():
 async def test_observation_from_another_device_cannot_authorize_input():
     obs = scene()
     obs.device_id = 'other'
-    ctrl = control([{'status': 'success', 'data': obs.to_dict()}])
+    ctrl = control([{'status': 'success', 'data': obs.to_dict()}]*4)
     result = await AgentTurn(ctrl, ScriptedModel([call('ui.observe')])).run('Type hello', 'asus', {})
-    assert result.status == 'error' and ctrl.execute_and_observe.await_count == 1
+    assert result.status == 'error' and result.data['recovery_category']=='TARGET_CONTEXT_MISMATCH'
+    assert ctrl.execute_and_observe.await_count == 4
+    assert all(c.args[1]=='ui.observe' for c in ctrl.execute_and_observe.await_args_list)
 
 
 @pytest.mark.parametrize('method,args', [('keypress', {'key': 'enter'}), ('hotkey', {'keys': ['ctrl', 'a']})])

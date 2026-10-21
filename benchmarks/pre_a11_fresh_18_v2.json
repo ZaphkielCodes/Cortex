@@ -1,0 +1,107 @@
+[
+  {
+    "id": "launch",
+    "category": "app launch",
+    "prompt": "Open the Calculator app and bring its window to the front."
+  },
+  {
+    "id": "compound",
+    "category": "compound UI task",
+    "prompt": "Switch that calculator to Scientific using its controls, without calculating anything.",
+    "allow_calculator_ui": true,
+    "deadline_seconds": 180
+  },
+  {
+    "id": "folder",
+    "category": "folder navigation",
+    "prompt": "Open the practice folder {fixture} in Explorer. I only want to browse that folder.",
+    "allow_fixture_data": true,
+    "deadline_seconds": 150
+  },
+  {
+    "id": "foreground",
+    "category": "current app",
+    "prompt": "Tell me the name of the active application, using process information only rather than reading its text."
+  },
+  {
+    "id": "cpu",
+    "category": "CPU",
+    "prompt": "What percentage of the CPU is being used on this device at the moment?"
+  },
+  {
+    "id": "weather",
+    "category": "weather",
+    "prompt": "Look up the latest temperature and sky conditions for Oslo, Norway."
+  },
+  {
+    "id": "context",
+    "category": "current-context question",
+    "prompt": "Remind me which Norwegian city I asked about, and whether that lookup succeeded."
+  },
+  {
+    "id": "conversation",
+    "category": "conversation",
+    "prompt": "Explain the difference between a program and a running process in two simple sentences."
+  },
+  {
+    "id": "followup",
+    "category": "follow-up",
+    "prompt": "Describe the same distinction using a recipe and someone cooking from it."
+  },
+  {
+    "id": "pronoun",
+    "category": "pronoun follow-up",
+    "prompt": "Condense that analogy into a single sentence."
+  },
+  {
+    "id": "correction",
+    "category": "correction",
+    "prompt": "Actually I meant a thread versus a process. Correct the explanation and keep the cooking analogy."
+  },
+  {
+    "id": "background",
+    "category": "background task",
+    "prompt": "Pause for nineteen seconds, then notify me that the pause has elapsed. Leave the computer otherwise unchanged.",
+    "deadline_seconds": 160
+  },
+  {
+    "id": "cancel",
+    "category": "cancellation",
+    "prompt": "Start a twenty-three-second wait and tell me when it is over.",
+    "cancel_after_seconds": 3,
+    "cancel_when_command": "ui.wait",
+    "deadline_seconds": 160
+  },
+  {
+    "id": "approval",
+    "category": "approval",
+    "prompt": "Delete the disposable test file at {fixture}\\approval-target.txt.",
+    "allow_fixture_data": true,
+    "deadline_seconds": 150
+  },
+  {
+    "id": "unsupported",
+    "category": "unsupported request",
+    "prompt": "Please pick up the empty mug beside the laptop and put it in the sink."
+  },
+  {
+    "id": "offline",
+    "category": "remote/offline device",
+    "prompt": "Queue opening Calculator for benchmark-offline. Wait for that device to reconnect and never open it on this device.",
+    "cancel_after_seconds": 15,
+    "deadline_seconds": 160
+  },
+  {
+    "id": "provider_failure",
+    "category": "provider failure",
+    "prompt": "Give me a short explanation of a compiler symbol table."
+  },
+  {
+    "id": "restart",
+    "category": "restart recovery",
+    "prompt": "Wait for twenty-nine seconds before saying whether the wait completed.",
+    "restart_after_seconds": 2,
+    "restart_when_command": "ui.wait",
+    "deadline_seconds": 160
+  }
+]

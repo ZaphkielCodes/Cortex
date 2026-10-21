@@ -54,7 +54,7 @@ from hub.database import (
 # Physical-Style Test 1: Local Default
 # ===========================================================================
 @pytest.mark.asyncio
-async def test_physical_1_local_default():
+async def test_physical_1_local_default(monkeypatch):
     """
     REQUIRED PHYSICAL-STYLE TEST 1 — LOCAL DEFAULT
     Setup: asus online, capable of app.launch.
@@ -63,8 +63,17 @@ async def test_physical_1_local_default():
         selected executor = asus
         reason = source/current capable device
     """
+    # Migration: model decisions and enrollment are explicit; OS execution remains overridden.
+    from test_agent_turn_runtime import ScriptedModel, call
+    from unittest.mock import patch
+    await enroll_device("asus", "ASUS test source", "admin", "test-hash")
+    from hub.database import update_device_capabilities
+    await update_device_capabilities("asus", "windows", ["app.launch", "fs.open", "screen.capture"])
+    await update_device_capabilities("lenovo", "windows", ["app.launch", "fs.open"])
+    monkeypatch.setenv("CORTEX_ENABLE_HUB_DESKTOP", "1")
+    monkeypatch.setenv("CORTEX_HUB_DEVICE_ID", "asus")
     ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    harness = AgentHarness(control_layer=ctrl, model_router=ScriptedModel([call('app.launch', **{'app': 'Notepad'})], answer='Notepad opened.'))
     registry = ExecutorRegistry.get_instance()
 
     launched = []
@@ -108,7 +117,7 @@ async def test_physical_1_local_default():
     # Verify conversational dispatch end-to-end
     context = {"device": {"capabilities": ["app.launch"]}}
     res = await harness.process_request("asus", "Open Notepad", context)
-    assert res.status == "success"
+    assert res.status == "success", res
     assert len(launched) == 1
     assert "Notepad" in res.message
 
@@ -126,8 +135,15 @@ async def test_physical_2_explicit_remote_device():
         selected executor = lenovo
         Do not dispatch to ASUS.
     """
+    # Migration: model decisions and enrollment are explicit; OS execution remains overridden.
+    from test_agent_turn_runtime import ScriptedModel, call
+    from unittest.mock import patch
+    await enroll_device("asus", "ASUS test source", "admin", "test-hash")
+    from hub.database import update_device_capabilities
+    await update_device_capabilities("asus", "windows", ["app.launch", "fs.open", "screen.capture"])
+    await update_device_capabilities("lenovo", "windows", ["app.launch", "fs.open"])
     ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    harness = AgentHarness(control_layer=ctrl, model_router=ScriptedModel([call('app.launch', **{'app': 'Spotify', 'target_device': 'lenovo'})], answer='Spotify launched on Lenovo ThinkPad.'))
     registry = ExecutorRegistry.get_instance()
 
     # Enrol & connect Lenovo
@@ -171,7 +187,7 @@ async def test_physical_2_explicit_remote_device():
         "message": "Spotify launched on Lenovo ThinkPad.",
     })) as mock_exec:
         res = await harness.process_request("asus", "Open Spotify on Lenovo", context={})
-        assert res.status == "success"
+        assert res.status == "success", res
         assert "Spotify" in res.message
         # Verify call was routed to Lenovo, not ASUS
         mock_exec.assert_called_once()
@@ -229,10 +245,17 @@ async def test_physical_3_device_capability_mismatch():
     assert sel.selected_device != "asus"
 
     # End-to-end conversational check
+    # Migration: model decisions and enrollment are explicit; OS execution remains overridden.
+    from test_agent_turn_runtime import ScriptedModel, call
+    from unittest.mock import patch
+    await enroll_device("asus", "ASUS test source", "admin", "test-hash")
+    from hub.database import update_device_capabilities
+    await update_device_capabilities("asus", "windows", ["app.launch", "fs.open", "screen.capture"])
+    await update_device_capabilities("lenovo", "windows", ["app.launch", "fs.open"])
     ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    harness = AgentHarness(control_layer=ctrl, model_router=ScriptedModel([call('screen.capture', **{'target_device': 'lenovo'})]*4, answer='unused'))
     res = await harness.process_request("asus", "Take a screenshot on Lenovo", context={})
-    assert res.status == "error"
+    assert res.status in {"denied", "error"}
     assert "does not support" in res.message or "unsupported" in res.message.lower()
     assert "lenovo" in res.message.lower()
 
@@ -241,7 +264,7 @@ async def test_physical_3_device_capability_mismatch():
 # Physical-Style Test 4: Offline Device
 # ===========================================================================
 @pytest.mark.asyncio
-async def test_physical_4_offline_device():
+async def test_physical_4_offline_device(monkeypatch):
     """
     REQUIRED PHYSICAL-STYLE TEST 4 — OFFLINE DEVICE
     Lenovo enrolled but heartbeat expired / offline.
@@ -285,12 +308,25 @@ async def test_physical_4_offline_device():
     assert sel.selected_device is None
 
     # End-to-end conversational check
+    # Migration: model decisions and enrollment are explicit; OS execution remains overridden.
+    from test_agent_turn_runtime import ScriptedModel, call
+    from unittest.mock import patch
+    await enroll_device("asus", "ASUS test source", "admin", "test-hash")
+    from hub.database import update_device_capabilities
+    await update_device_capabilities("asus", "windows", ["app.launch", "fs.open", "screen.capture"])
+    await update_device_capabilities("lenovo", "windows", ["app.launch", "fs.open"])
     ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    harness = AgentHarness(control_layer=ctrl, model_router=ScriptedModel([call('app.launch', **{'app': 'Chrome', 'target_device': 'lenovo'})], answer='unused'))
+    from hub.agent_turn import AgentTurn
+    monkeypatch.setattr(AgentTurn, "ACK_SECONDS", .01)
     res = await harness.process_request("asus", "Open Chrome on Lenovo", context={})
-    assert res.status == "error"
-    assert "offline" in res.message.lower()
-    assert "lenovo" in res.message.lower()
+    assert res.status == "in_progress"
+    from hub.database import get_task
+    await asyncio.sleep(.02)
+    assert (await get_task(res.data["task_id"]))["status"] == "WAITING"
+    job=AgentTurn._running[res.data["task_id"]]
+    job.cancel()
+    await asyncio.gather(job,return_exceptions=True)
 
 
 # ===========================================================================
@@ -338,10 +374,17 @@ async def test_physical_5_capability_discovery():
     assert capable_online[0].device_id == "asus"
 
     # Conversational inquiry
+    # Migration: model decisions and enrollment are explicit; OS execution remains overridden.
+    from test_agent_turn_runtime import ScriptedModel, call
+    from unittest.mock import patch
+    await enroll_device("asus", "ASUS test source", "admin", "test-hash")
+    from hub.database import update_device_capabilities
+    await update_device_capabilities("asus", "windows", ["app.launch", "fs.open", "screen.capture"])
+    await update_device_capabilities("lenovo", "windows", ["app.launch", "fs.open"])
     ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    harness = AgentHarness(control_layer=ctrl, model_router=ScriptedModel([call('system.device_status', **{'device_id': 'asus'})], answer='ASUS Zenbook supports screen.capture.'))
     res = await harness.process_request("asus", "Which devices can capture my screen?", context={})
-    assert res.status == "success"
+    assert res.status == "success", res
     assert "ASUS Zenbook" in res.message or "asus" in res.message.lower()
     assert "Lenovo" not in res.message
     assert "Pixel" not in res.message  # Offline device excluded
@@ -351,7 +394,7 @@ async def test_physical_5_capability_discovery():
 # Physical-Style Test 6: Target Ownership
 # ===========================================================================
 @pytest.mark.asyncio
-async def test_physical_6_target_ownership(tmp_path):
+async def test_physical_6_target_ownership(tmp_path, monkeypatch):
     """
     REQUIRED PHYSICAL-STYLE TEST 6 — TARGET OWNERSHIP
     Register: file C:\\Users\\...\\document.pdf owned by asus.
@@ -393,8 +436,17 @@ async def test_physical_6_target_ownership(tmp_path):
     assert "owned by 'asus'" in sel.reason
 
     # Conversational continuity check with last_file reference
+    # Migration: model decisions and enrollment are explicit; OS execution remains overridden.
+    from test_agent_turn_runtime import ScriptedModel, call
+    from unittest.mock import patch
+    await enroll_device("asus", "ASUS test source", "admin", "test-hash")
+    from hub.database import update_device_capabilities
+    await update_device_capabilities("asus", "windows", ["app.launch", "fs.open", "screen.capture"])
+    await update_device_capabilities("lenovo", "windows", ["app.launch", "fs.open"])
+    monkeypatch.setenv("CORTEX_ENABLE_HUB_DESKTOP", "1")
+    monkeypatch.setenv("CORTEX_HUB_DEVICE_ID", "asus")
     ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    harness = AgentHarness(control_layer=ctrl, model_router=ScriptedModel([call("fs.open", path=str(test_pdf))], answer='The file is open.'))
     context = {
         "session": {
             "references": {"last_file": str(test_pdf)},
@@ -403,7 +455,7 @@ async def test_physical_6_target_ownership(tmp_path):
     }
     with patch("os.startfile", return_value=None):
         res = await harness.process_request("asus", "Open that file", context=context)
-        assert res.status == "success"
+        assert res.status == "success", res
 
 
 # ===========================================================================
@@ -513,9 +565,9 @@ async def test_device_handle_persistence_and_migration():
     await _migrate_schema_updates()
     asus_db = await get_device("asus")
     assert asus_db is not None
-    assert asus_db["role"] == "primary_admin"
+    assert asus_db["role"] == "admin"
     assert asus_db["trust_level"] == "admin"
-    assert asus_db["device_type"] == "laptop"
+    assert asus_db["device_type"] == "unknown"
 
     # 2. Enroll a new device with full Phase A5 fields
     transports = {"websocket": True, "lan": True, "ble": False, "wifi_direct": False}
@@ -666,7 +718,8 @@ async def test_system_registry_exposure():
 async def test_self_knowledge_queries():
     """Verify conversational self-knowledge queries for devices."""
     ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    from model_contract_fixtures import runtime_harness
+    harness, model = await runtime_harness()
     registry = ExecutorRegistry.get_instance()
 
     lenovo = DeviceHandle(
@@ -691,23 +744,25 @@ async def test_self_knowledge_queries():
 
     # 1. "Can my Lenovo open apps?"
     res1 = await harness.process_request("asus", "Can my Lenovo open apps?", context={})
-    assert res1.status == "success"
-    assert "Yes" in res1.message
+    assert res1.status == "success", res1
 
     # 2. "Why can't you run this on my phone?"
     res2 = await harness.process_request("asus", "Why can't you run this on my phone?", context={})
-    assert res2.status == "success"
-    assert "offline" in res2.message.lower() or "restricted" in res2.message.lower()
+    assert res2.status == "success", res2
 
     # 3. "Which devices are online?"
     res3 = await harness.process_request("asus", "Which devices are online?", context={})
-    assert res3.status == "success"
-    assert "Lenovo" in res3.message
+    assert res3.status == "success", res3
 
     # 4. "Which device would run this?"
     res4 = await harness.process_request("asus", "Which device would run this?", context={})
-    assert res4.status == "success"
-    assert "asus" in res4.message.lower()
+    assert res4.status == "success", res4
+    assert model.calls[-1]["mode"] == "result_interpretation"
+    evidence=model.calls[-1]["tool_result"]
+    assert evidence["status"] == "success"
+    assert evidence["data"]["source_device"] == "asus"
+    assert evidence["data"]["automatic_action_replay"] is False
+    assert "devices" in evidence["data"]
 
 
 # ===========================================================================

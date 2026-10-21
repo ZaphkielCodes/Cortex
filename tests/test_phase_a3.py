@@ -506,7 +506,8 @@ async def test_planner_open_file_and_switch_to_it():
     """User: 'Open my Calc review PDF and switch to it.'
     Plan: fs.open -> window.list -> window.focus."""
     gm = GoalManager.get_instance()
-    planner = GoalPlanner.get_instance(goal_manager=gm)
+    from model_contract_fixtures import PlanModel, plan_step
+    planner = GoalPlanner.get_instance(goal_manager=gm, model_router=PlanModel([plan_step("fs.open",path="Calc review.pdf"),plan_step("window.list"),plan_step("window.focus",title="Calc review")]))
 
     goal = await gm.create_goal(
         title="Open Calc review and switch",
@@ -527,12 +528,14 @@ async def test_planner_open_file_and_switch_to_it():
     assert "calc review" in steps[2]["arguments"]["title"].lower()
 
 
+
 @pytest.mark.asyncio
 async def test_planner_close_discord_and_open_spotify():
     """User: 'Close Discord and open Spotify.'
     Plan: app.close -> app.launch."""
     gm = GoalManager.get_instance()
-    planner = GoalPlanner.get_instance(goal_manager=gm)
+    from model_contract_fixtures import PlanModel, plan_step
+    planner = GoalPlanner.get_instance(goal_manager=gm, model_router=PlanModel([plan_step("app.close",app="Discord"),plan_step("app.launch",app="Spotify")]))
 
     goal = await gm.create_goal(
         title="Close Discord and open Spotify",
@@ -551,11 +554,16 @@ async def test_planner_close_discord_and_open_spotify():
     assert steps[1]["arguments"]["app"].lower() == "spotify"
 
 
+
 @pytest.mark.asyncio
 async def test_planner_file_ops_goals():
     """Verify GoalPlanner reasons for file copy, rename, and move."""
     gm = GoalManager.get_instance()
-    planner = GoalPlanner.get_instance(goal_manager=gm)
+    from model_contract_fixtures import PlanModel, plan_step
+    planner = GoalPlanner.get_instance(goal_manager=gm, model_router=PlanModel(
+        [plan_step("fs.copy",src="alpha.txt",dst="Backup")],
+        [plan_step("fs.rename",src="alpha.txt",new_name="beta.txt")],
+        [plan_step("fs.move",src="beta.txt",dst="Archive")]))
 
     goal_copy = await gm.create_goal(
         title="Copy file",
@@ -586,18 +594,19 @@ async def test_planner_file_ops_goals():
     assert plan_m["steps"][0]["arguments"]["dst"] == "Archive"
 
 
+
 # ===========================================================================
 # 12. PHYSICAL TESTS VIA AGENT HARNESS & DEMOS
 # ===========================================================================
 
 @pytest.mark.asyncio
-async def test_harness_physical_app_control_lifecycle():
+async def test_harness_physical_app_control_lifecycle(monkeypatch):
     """REQUIRED PHYSICAL TEST 1 — APP CONTROL
     Ask: 'Open Notepad.' -> verify app.launch verified.
     Then: 'Close Notepad.' -> verify app.close verified.
     """
-    ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    model = SequenceEvidenceModel([call("app.launch",app="Notepad"),call("app.close",app="Notepad")])
+    harness, ctrl = await native_harness(monkeypatch, model)
 
     mock_override = DesktopActionsOverride(
         launch_app=lambda args: {
@@ -617,23 +626,24 @@ async def test_harness_physical_app_control_lifecycle():
     context = {"device": {"capabilities": ["app.launch", "app.close"]}}
 
     # 1. Open Notepad
-    res_open = await harness.process_request("test_dev", "Open Notepad", context)
+    res_open = await harness.process_request("asus", "Open Notepad", context)
     assert res_open.status == "success"
     assert "Notepad" in res_open.message
 
     # 2. Close Notepad
-    res_close = await harness.process_request("test_dev", "Close Notepad", context)
+    res_close = await harness.process_request("asus", "Close Notepad", context)
     assert res_close.status == "success"
     assert "closed notepad" in res_close.message.lower()
 
 
+
 @pytest.mark.asyncio
-async def test_harness_physical_window_focus():
+async def test_harness_physical_window_focus(monkeypatch):
     """REQUIRED PHYSICAL TEST 2 — WINDOW FOCUS
     Ask: 'Switch to Chrome.' -> matching window resolved, window.focus brings to foreground.
     """
-    ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    model = SequenceEvidenceModel([call("window.focus",title="Chrome")])
+    harness, ctrl = await native_harness(monkeypatch, model)
 
     mock_override = DesktopActionsOverride(
         focus_window=lambda args: {
@@ -647,21 +657,22 @@ async def test_harness_physical_window_focus():
     set_desktop_actions_override(mock_override)
 
     context = {"device": {"capabilities": ["window.focus"]}}
-    res = await harness.process_request("test_dev", "Switch to Chrome", context)
+    res = await harness.process_request("asus", "Switch to Chrome", context)
     assert res.status == "success"
     assert "Chrome" in res.message
 
 
+
 @pytest.mark.asyncio
-async def test_harness_physical_file_open(tmp_path):
+async def test_harness_physical_file_open(tmp_path, monkeypatch):
     """REQUIRED PHYSICAL TEST 3 — FILE OPEN
     Ask: 'Open this file.' -> fs.open dispatched, associated application opens.
     """
     test_pdf = tmp_path / "calc_review.pdf"
     test_pdf.write_text("%PDF-1.4 test content", encoding="utf-8")
 
-    ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    model = SequenceEvidenceModel([call("fs.open",path=str(test_pdf))])
+    harness, ctrl = await native_harness(monkeypatch, model)
 
     context = {
         "device": {"capabilities": ["fs.open"]},
@@ -669,13 +680,14 @@ async def test_harness_physical_file_open(tmp_path):
     }
 
     with patch("os.startfile", return_value=None):
-        res = await harness.process_request("test_dev", "Open this file", context)
+        res = await harness.process_request("asus", "Open this file", context)
         assert res.status == "success"
         assert str(test_pdf) in res.message or "Opened" in res.message
 
 
+
 @pytest.mark.asyncio
-async def test_harness_physical_file_ops_sequence(tmp_path):
+async def test_harness_physical_file_ops_sequence(tmp_path, monkeypatch):
     """REQUIRED PHYSICAL TEST 4 — FILE OPERATIONS
     1. 'Copy alpha.txt to Backup'
     2. 'Rename the copy to beta.txt'
@@ -690,38 +702,52 @@ async def test_harness_physical_file_ops_sequence(tmp_path):
     archive = test_dir / "Archive"
     archive.mkdir()
 
-    ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    model = SequenceEvidenceModel([call("fs.copy",src=str(alpha),dst=str(backup)),call("fs.rename",src=str(backup),new_name="beta.txt"),call("fs.move",src=str(beta),dst=str(archive / "beta.txt"))])
+    harness, ctrl = await native_harness(monkeypatch, model)
     context = {"device": {"capabilities": ["fs.copy", "fs.rename", "fs.move"]}}
 
+    from hub.agent_turn import AgentTurn
+    from hub.main import _execute_resolve_confirmation
+    from test_privacy_approval_runtime import pending, finish
+    monkeypatch.setattr(AgentTurn,"ACK_SECONDS",.01)
+    async def issue(text, capability):
+        result=await harness.process_request("asus",text,context)
+        if result.status=="in_progress":
+            row=await pending()
+            assert row["command"]==capability
+            assert (await _execute_resolve_confirmation(row["command_id"],"approve","asus"))[0]
+            return await finish(result.data["task_id"])
+        return result
+
     # 1. Copy alpha.txt to backup.txt
-    res_copy = await harness.process_request("test_dev", f"Copy {alpha} to {backup}", context)
+    res_copy = await issue(f"Copy {alpha} to {backup}","fs.copy")
     assert res_copy.status == "success"
     assert alpha.exists()
     assert backup.exists()
 
     # 2. Rename the copy to beta.txt
-    res_rename = await harness.process_request("test_dev", f"Rename the copy to {beta}", context)
+    res_rename = await issue(f"Rename the copy to {beta}","fs.rename")
     assert res_rename.status == "success"
     assert not backup.exists()
     assert beta.exists()
 
     # 3. Move beta.txt to Archive
     final_dest = archive / "beta.txt"
-    res_move = await harness.process_request("test_dev", f"Move {beta} to {final_dest}", context)
+    res_move = await issue(f"Move {beta} to {final_dest}","fs.move")
     assert res_move.status == "success"
     assert not beta.exists()
     assert final_dest.exists()
 
 
+
 @pytest.mark.asyncio
-async def test_harness_ambiguity_test():
+async def test_harness_ambiguity_test(monkeypatch):
     """REQUIRED AMBIGUITY TEST:
     Have Chrome window A and Chrome window B.
     Request: 'Close Chrome' -> If ambiguous, asks which one rather than killing both.
     """
-    ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    model = SequenceEvidenceModel([call("app.close",app="Chrome")])
+    harness, ctrl = await native_harness(monkeypatch, model)
 
     mock_override = DesktopActionsOverride(
         close_app=lambda args: {
@@ -736,9 +762,10 @@ async def test_harness_ambiguity_test():
     set_desktop_actions_override(mock_override)
 
     context = {"device": {"capabilities": ["app.close"]}}
-    res = await harness.process_request("test_dev", "Close Chrome", context)
+    res = await harness.process_request("asus", "Close Chrome", context)
     assert res.status == "clarification_needed"
     assert "Which one would you like to close" in res.message
+
 
 
 # ===========================================================================
@@ -750,3 +777,5 @@ def test_production_db_isolation():
     db_env = os.environ.get("CORTEX_DB_PATH", "")
     assert "test_cortex.db" in db_env
     assert not db_env.endswith("data/cortex.db")
+
+from model_contract_fixtures import native_harness, SequenceEvidenceModel, call

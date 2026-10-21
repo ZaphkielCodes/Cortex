@@ -97,7 +97,7 @@ class CalendarIntegration(IntegrationPlugin):
                     "code_verifier": verifier
                 })
                 if resp.status_code != 200:
-                    log.error(f"Failed to exchange code: {resp.text}")
+                    log.error("OAuth exchange rejected status=%s", resp.status_code)
                     return False
                 data = resp.json()
                 expires_at = (datetime.now(timezone.utc) + timedelta(seconds=data.get("expires_in", 3600))).isoformat()

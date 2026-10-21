@@ -31,70 +31,27 @@ from hub.screen_perception import ScreenPerceptionManager, ScreenObservation
 # Test 1: Capture screenshot -> read that screenshot -> same screenshot analyzed
 # ===========================================================================
 @pytest.mark.asyncio
-async def test_1_screenshot_continuity_same_screenshot_analyzed(tmp_path):
-    """
-    Test 1:
-    'Take a screenshot' -> screen.capture succeeds and persists screenshot ref.
-    'Read that screenshot' -> inspects the exact existing screenshot ref without taking a new one.
-    """
-    ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
-
-    screenshot_file = tmp_path / "screenshot_20261014_120000.png"
-    screenshot_file.write_bytes(b"FAKE_PNG_BYTES_FOR_TEST")
-    sc_ref_str = str(screenshot_file.resolve())
-
-    # 1. Take a screenshot: executor returns success with data & message
-    executor_result = {
-        "status": "success",
-        "message": f"Screenshot saved: {sc_ref_str}",
-        "data": {
-            "image_ref": sc_ref_str,
-            "width": 1920,
-            "height": 1080,
-            "display_index": 0,
-        },
-    }
-
-    # Simulate command dispatch and completion
-    await SessionContextManager.set_screenshot_ref("asus", sc_ref_str)
-    await SessionContextManager.update_session(
-        device_id="asus",
-        request="Take a screenshot",
-        response=executor_result,
-        action_plan={"action": "screen.capture", "arguments": {}, "intent": "capture_screen"},
-    )
-
-    # Verify session has the screenshot reference
+async def test_1_screenshot_continuity_same_screenshot_analyzed(tmp_path, monkeypatch):
+    """Persisted screenshot identity reaches the model and actual analysis provider."""
+    from hub.vision_provider import MockVisionProvider, set_vision_provider_override
+    from model_contract_fixtures import native_harness, EvidenceModel
+    image = str(tmp_path / "original.png")
+    await SessionContextManager.set_screenshot_ref("asus",image)
     sess = await SessionContextManager.get_session("asus")
-    assert sess["references"].get("last_screenshot_ref") == sc_ref_str
+    provider = MockVisionProvider(summary="Google Chrome showing the dashboard")
+    provider.locality = "local_device"
+    provider.analyze_image = AsyncMock(wraps=provider.analyze_image)
+    set_vision_provider_override(provider)
+    model = EvidenceModel("screen.analyze",{"image_ref":image,"question":"What do you see?"})
+    harness, ctrl = await native_harness(monkeypatch,model)
+    ctrl.execute_and_observe = AsyncMock(wraps=ctrl.execute_and_observe)
+    resp = await harness.process_request("asus","Read that screenshot and tell me what you see.",{"session":sess})
+    assert resp.status == "success" and "Google Chrome" in resp.message
+    state=json.loads(model.calls[0]["system_prompt"].split("\nSTATE:\n")[1])
+    assert state["context"]["session_references"]["last_screenshot_ref"] == image
+    assert provider.analyze_image.await_args.kwargs["image_ref"] == image
+    assert [c.args[1] for c in ctrl.execute_and_observe.await_args_list] == ["screen.analyze"]
 
-    # 2. Follow-up: "Read that screenshot"
-    # Mock vision provider to verify it receives the EXACT screenshot path
-    mock_obs = ScreenObservation(
-        observation_id="obs_test_1",
-        device_id="asus",
-        captured_at="2026-10-14T12:00:00Z",
-        summary="You have Google Chrome open with the Cortex Dashboard.",
-        visible_apps=["Google Chrome"],
-        source_image_reference=sc_ref_str,
-    )
-
-    with patch("hub.vision_provider.get_vision_provider") as mock_get_vp:
-        mock_vp = MagicMock()
-        mock_vp.provider_name = "mock_vision"
-        mock_vp.model_name = "mock_model"
-        mock_vp.analyze_image = AsyncMock(return_value=mock_obs)
-        mock_get_vp.return_value = mock_vp
-
-        resp = await harness.process_request("asus", "Read that screenshot and tell me what you see.", context={})
-        assert resp.status == "success"
-        assert "Google Chrome" in resp.message or "dashboard" in resp.message.lower()
-
-        # Verify that analyze_image was called with the exact screenshot reference
-        mock_vp.analyze_image.assert_awaited_once()
-        call_kwargs = mock_vp.analyze_image.call_args.kwargs
-        assert call_kwargs["image_ref"] == sc_ref_str
 
 
 # ===========================================================================
@@ -102,31 +59,14 @@ async def test_1_screenshot_continuity_same_screenshot_analyzed(tmp_path):
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_2_close_the_app_im_using_resolves_foreground_app():
-    """
-    Test 2:
-    Foreground app = Discord in world state.
-    'close the app I'm using' -> dispatches app.close(app='Discord').
-    """
-    ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    """Fresh foreground evidence precedes the model's close, with exact dispatch target."""
+    harness, ctrl, model = foreground_close_harness("Discord")
+    resp = await harness.process_request("asus","close the app I'm using",{})
+    assert resp.status == "success"
+    assert [c.args[1] for c in ctrl.execute_and_observe.await_args_list] == ["ui.observe","app.close"]
+    assert ctrl.execute_and_observe.await_args.args[2]["app"] == "Discord"
+    assert "Discord" in model.calls[1]["system_prompt"]
 
-    context = {
-        "world_state": {
-            "foreground_app": "Discord",
-        }
-    }
-
-    with patch.object(ctrl, "execute_and_observe", new_callable=AsyncMock) as mock_exec:
-        mock_exec.return_value = {"status": "success", "message": "Closed Discord."}
-
-        resp = await harness.process_request("asus", "close the app I'm using", context=context)
-
-        assert resp.status == "success"
-        assert "Discord" in resp.message
-        mock_exec.assert_called_once()
-        _, kwargs = mock_exec.call_args
-        args_dict = mock_exec.call_args[0][2]
-        assert args_dict["app"] == "Discord"
 
 
 # ===========================================================================
@@ -134,41 +74,20 @@ async def test_2_close_the_app_im_using_resolves_foreground_app():
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_3_close_it_after_explicit_confirmation():
-    """
-    Test 3:
-    Foreground app = ChatGPT.
-    Turn 1: 'What app am I currently using?' -> Cortex confirms ChatGPT.
-    Turn 2: 'close it' -> pronoun 'it' resolves to ChatGPT.
-    """
-    ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
-
-    context = {
-        "world_state": {
-            "foreground_app": "ChatGPT",
-        }
-    }
-
-    # Turn 1: Ask current app
-    resp1 = await harness.process_request("asus", "What app am I currently using?", context=context)
-    assert resp1.status == "success"
-    assert "ChatGPT" in resp1.message
-
-    # Session references now record ChatGPT as confirmed current app
+    """Pronoun turns receive durable prior conversation, not a regex-confirmed-app tag."""
+    from model_contract_fixtures import scripted_harness, call, SequenceEvidenceModel
+    harness, ctrl, model = scripted_harness([call("ui.observe",include_tree=False)],
+        [{"status":"success","data":{"foreground_app":"ChatGPT"}}],answer="You're using ChatGPT.")
+    first = await harness.process_request("asus","What app am I currently using?",{})
+    assert first.status == "success" and first.data["foreground_app"] == "ChatGPT"
+    await SessionContextManager.update_session("asus","What app am I currently using?",first.model_dump())
     sess = await SessionContextManager.get_session("asus")
-    assert sess["references"].get("last_confirmed_app") == "ChatGPT"
+    harness, ctrl, model = scripted_harness([call("app.close",app="ChatGPT")],[{"status":"success","data":{"closed":True}}])
+    final = await harness.process_request("asus","close it",{"session":sess})
+    assert final.status == "success"
+    assert ctrl.execute_and_observe.await_args.args[2]["app"] == "ChatGPT"
+    assert "ChatGPT" in json.dumps(model.calls[0][1]["conversation_history"])
 
-    # Turn 2: "close it"
-    with patch.object(ctrl, "execute_and_observe", new_callable=AsyncMock) as mock_exec:
-        mock_exec.return_value = {"status": "success", "message": "Closed ChatGPT."}
-
-        resp2 = await harness.process_request("asus", "close it", context=context)
-
-        assert resp2.status == "success"
-        assert "ChatGPT" in resp2.message
-        mock_exec.assert_called_once()
-        args_dict = mock_exec.call_args[0][2]
-        assert args_dict["app"] == "ChatGPT"
 
 
 # ===========================================================================
@@ -176,46 +95,16 @@ async def test_3_close_it_after_explicit_confirmation():
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_4_stale_target_cannot_override_live_foreground_app():
-    """
-    Test 4:
-    Stale session target = Once Human in historical references.
-    Foreground app = Discord in active world state.
-    'close the app that I'm using right now' -> chooses Discord, never Once Human.
-    """
-    ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    """A stale session target remains contextual data; only the fresh model target executes."""
+    harness, ctrl, model = foreground_close_harness("Discord")
+    resp = await harness.process_request("asus","Close the app that I'm using right now.",
+        {"session":{"references":{"last_app":"Once Human","last_action_target":"Once Human"}}})
+    assert resp.status == "success"
+    assert "Once Human" in model.calls[0]["system_prompt"]
+    assert "Discord" in model.calls[1]["system_prompt"]
+    closes=[c for c in ctrl.execute_and_observe.await_args_list if c.args[1]=="app.close"]
+    assert len(closes)==1 and closes[0].args[2]["app"]=="Discord"
 
-    # Inject stale Once Human target into session references
-    sess = await SessionContextManager.get_session("asus")
-    sess["references"]["last_app"] = "Once Human"
-    sess["references"]["last_action_target"] = "Once Human"
-    sess["references"]["grounded_target"] = {
-        "target_name": "Once Human",
-        "target_kind": "filesystem_item",
-        "path": "c:/games/once_human.exe",
-    }
-    await SessionContextManager.set_grounded_target("asus", sess["references"]["grounded_target"])
-
-    context = {
-        "session": sess,
-        "world_state": {
-            "foreground_app": "Discord",
-        },
-    }
-
-    with patch.object(ctrl, "execute_and_observe", new_callable=AsyncMock) as mock_exec:
-        mock_exec.return_value = {"status": "success", "message": "Closed Discord."}
-
-        resp = await harness.process_request(
-            "asus", "Close the app that I'm using right now.", context=context
-        )
-
-        assert resp.status == "success"
-        assert "Discord" in resp.message
-        assert "Once Human" not in resp.message
-        mock_exec.assert_called_once()
-        args_dict = mock_exec.call_args[0][2]
-        assert args_dict["app"] == "Discord"
 
 
 # ===========================================================================
@@ -223,44 +112,17 @@ async def test_4_stale_target_cannot_override_live_foreground_app():
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_5_contextual_precedence_explicit_vs_foreground():
-    """
-    Test 5:
-    Recent explicit target = Notepad.
-    Foreground app = ChatGPT.
-    1. 'close the app I'm using' -> semantic foreground takes precedence -> ChatGPT.
-    2. 'close Notepad' -> explicit target in current utterance takes highest precedence -> Notepad.
-    """
-    ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
+    """Exact explicit model targets are not overwritten by stale references or snapshots."""
+    from model_contract_fixtures import scripted_harness, call
+    for request,target in [("close the app I'm using","ChatGPT"),("close Notepad","Notepad")]:
+        harness,ctrl,model=scripted_harness([call("app.close",app=target)],[{"status":"success","data":{"closed":True}}])
+        resp=await harness.process_request("asus",request,{"world_state":{"foreground_app":"ChatGPT"},"session":{"references":{"last_app":"Notepad"}}})
+        assert resp.status == "success"
+        assert ctrl.execute_and_observe.await_count == 1
+        assert ctrl.execute_and_observe.await_args.args[2]["app"] == target
+        assert model.calls[0][0] == request
+        assert "ChatGPT" in model.calls[0][1]["system_prompt"] and "Notepad" in model.calls[0][1]["system_prompt"]
 
-    sess = await SessionContextManager.get_session("asus")
-    sess["references"]["last_app"] = "Notepad"
-    sess["references"]["last_action_target"] = "Notepad"
-
-    context = {
-        "session": sess,
-        "world_state": {
-            "foreground_app": "ChatGPT",
-        },
-    }
-
-    # 1. Semantic foreground reference selects ChatGPT
-    with patch.object(ctrl, "execute_and_observe", new_callable=AsyncMock) as mock_exec1:
-        mock_exec1.return_value = {"status": "success", "message": "Closed ChatGPT."}
-        resp1 = await harness.process_request("asus", "close the app I'm using", context=context)
-        assert resp1.status == "success"
-        assert "ChatGPT" in resp1.message
-        mock_exec1.assert_called_once()
-        assert mock_exec1.call_args[0][2]["app"] == "ChatGPT"
-
-    # 2. Explicit utterance target selects Notepad despite foreground ChatGPT
-    with patch.object(ctrl, "execute_and_observe", new_callable=AsyncMock) as mock_exec2:
-        mock_exec2.return_value = {"status": "success", "message": "Closed Notepad."}
-        resp2 = await harness.process_request("asus", "close Notepad", context=context)
-        assert resp2.status == "success"
-        assert "Notepad" in resp2.message
-        mock_exec2.assert_called_once()
-        assert mock_exec2.call_args[0][2]["app"] == "Notepad"
 
 
 # ===========================================================================
@@ -268,48 +130,20 @@ async def test_5_contextual_precedence_explicit_vs_foreground():
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_6_what_am_i_doing_right_now_synthesis():
-    """
-    Test 6:
-    'What am I doing right now?'
-    Case A: foreground_app = ChatGPT, screen summary = Cortex development conversation
-            -> "You're currently using ChatGPT and working on Cortex."
-    Case B: foreground_app = Discord, no task or screen
-            -> "You are currently using Discord."
-    Case C: No observations
-            -> conservative answer without hallucination.
-    """
-    ctrl = CortexControlLayer()
-    harness = AgentHarness(control_layer=ctrl)
-
-    # Case A: ChatGPT + Cortex development conversation
-    context_a = {
-        "world_state": {
-            "foreground_app": "ChatGPT",
-            "screen_summary": "Cortex development conversation",
-        }
-    }
-    resp_a = await harness.process_request("asus", "What am I doing right now?", context=context_a)
-    assert resp_a.status == "success"
-    assert "ChatGPT" in resp_a.message
-    assert "Cortex" in resp_a.message
-
-    # Case B: Discord only
-    context_b = {
-        "world_state": {
-            "foreground_app": "Discord",
-        }
-    }
-    resp_b = await harness.process_request("asus", "What am I doing right now?", context=context_b)
-    assert resp_b.status == "success"
-    assert "Discord" in resp_b.message
-
-    # Case C: Empty observations
-    context_c = {
-        "world_state": {}
-    }
-    resp_c = await harness.process_request("asus", "What am I doing right now?", context=context_c)
-    assert resp_c.status == "success"
-    assert "don't have enough" in resp_c.message.lower() or "not recorded" in resp_c.message.lower()
+    """Grounded snapshots reach model answers; absent observations require clarification."""
+    from model_contract_fixtures import scripted_harness
+    cases=[({"foreground_app":"ChatGPT","screen_summary":"Cortex development conversation"},
+            "RESPOND","The snapshot shows ChatGPT with a Cortex development conversation."),
+           ({"foreground_app":"Discord"},"RESPOND","The snapshot reports Discord."),
+           ({},"ASK_CLARIFICATION","What would you like me to inspect?")]
+    for facts,kind,answer in cases:
+        harness,ctrl,model=scripted_harness([{"decision":kind,"response_text":answer}])
+        resp=await harness.process_request("asus","What am I doing right now?",{"world_state":facts})
+        assert resp.status == ("success" if facts else "clarification_needed")
+        assert resp.message == answer
+        state=json.loads(model.calls[0][1]["system_prompt"].split("\nSTATE:\n")[1])
+        assert state["context"].get("world_snapshot",{}) == facts
+        ctrl.execute_and_observe.assert_not_awaited()
 
 
 # ===========================================================================
@@ -323,3 +157,18 @@ def test_7_production_db_isolation():
     assert resolved_test_db != prod_db, f"FATAL: Tests are targeting production DB at {resolved_test_db}!"
     assert not str(resolved_test_db).replace('\\', '/').endswith("data/cortex.db")
     assert prod_db.exists(), "Production DB data/cortex.db must exist."
+
+
+def foreground_close_harness(app):
+    from model_contract_fixtures import scripted_harness, call, SequenceEvidenceModel
+    harness,ctrl,_=scripted_harness([], [
+        {"status":"success","data":{"foreground_app":app}},
+        {"status":"success","data":{"closed":True}}])
+    model=SequenceEvidenceModel([
+        dict(call("ui.observe",include_tree=False),continue_after_result=True),
+        call("app.close",app=app),
+        {"decision":"RESPOND","response_text":"The requested application was closed."}])
+    harness.router=model
+    return harness,ctrl,model
+
+import json

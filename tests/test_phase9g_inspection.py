@@ -349,7 +349,7 @@ async def test_planner_uses_fs_list_when_available():
     """Verify GoalPlanner generates fs.list steps and dedicated capabilities take precedence over shell.run."""
     await setup_test_env_with_fs("asus")
     gm = GoalManager.get_instance()
-    planner = GoalPlanner.get_instance(goal_manager=gm)
+    planner = GoalPlanner.get_instance(goal_manager=gm, model_router=PlanModel([plan_step("fs.list",path="shell:Downloads")]))
 
     goal = await gm.create_goal(
         title="Check Downloads",
@@ -365,6 +365,7 @@ async def test_planner_uses_fs_list_when_available():
     step_caps = [s.capability for s in steps]
     assert "fs.list" in step_caps
     assert "shell.run" not in step_caps  # Dedicated capability used, NO shell fallback
+
 
 
 # ---------------------------------------------------------------------------
@@ -447,7 +448,7 @@ async def test_downloads_counting_flow(tmp_path):
     try:
         sim_agent = SimulatedAgentWebSocket("asus")
         ctrl = CortexControlLayer({"asus": sim_agent})
-        planner = GoalPlanner.get_instance(control_layer=ctrl, goal_manager=gm)
+        planner = GoalPlanner.get_instance(control_layer=ctrl, goal_manager=gm, model_router=PlanModel([plan_step("fs.list",path=str(dl_dir))]))
         runner = GoalRunner.get_instance(control_layer=ctrl, goal_manager=gm)
 
         goal = await gm.create_goal(
@@ -477,128 +478,41 @@ async def test_downloads_counting_flow(tmp_path):
         clear_known_folder_overrides()
 
 
+
 # ---------------------------------------------------------------------------
 # TEST 13: Required Realistic Test 1 (Once Human shortcut deletion)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_required_realistic_test_1_once_human(tmp_path):
-    """
-    REQUIRED REALISTIC TEST 1:
-    Seed a temporary Desktop fixture:
-      Once Human.lnk
-      Discord.lnk
-      CS211 Homework.pdf
-      random.txt
+async def test_required_realistic_test_1_once_human(tmp_path, monkeypatch):
+    """Observe actual files, dispatch the model-selected exact path, preserve approval."""
+    from hub.agent_turn import AgentTurn
+    from hub.main import _execute_resolve_confirmation
+    from test_privacy_approval_runtime import pending, finish
+    from model_contract_fixtures import SequenceEvidenceModel, native_harness, call
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    files = [desktop / name for name in ["Once Human.lnk","Discord.lnk","CS211 Homework.pdf","random.txt"]]
+    for item in files: item.write_text("isolated fixture",encoding="utf-8")
+    model = SequenceEvidenceModel([
+        dict(call("fs.list",path=str(desktop)),continue_after_result=True),
+        call("fs.delete",path=str(files[0])),
+        {"decision":"RESPOND","response_text":"The approved shortcut was deleted."}])
+    harness, ctrl = await native_harness(monkeypatch, model)
+    ctrl.execute_and_observe = __import__('unittest.mock',fromlist=['AsyncMock']).AsyncMock(wraps=ctrl.execute_and_observe)
+    ack = await harness.process_request("asus", "Delete the shortcut named Once Human from my desktop.", {})
+    row = await pending()
+    assert row["command"] == "fs.delete"
+    assert all(item.exists() for item in files)
+    assert "Once Human.lnk" in model.calls[1]["system_prompt"]
+    assert "Discord.lnk" in model.calls[1]["system_prompt"]
+    assert (await _execute_resolve_confirmation(row["command_id"],"approve","asus"))[0]
+    final = await finish(ack.data["task_id"])
+    assert final.status == "success"
+    assert not files[0].exists() and all(item.exists() for item in files[1:])
+    deletes=[c for c in ctrl.execute_and_observe.await_args_list if c.args[1]=="fs.delete"]
+    assert len(deletes)==1 and deletes[0].args[2]["path"]==str(files[0])
 
-    Request:
-      'Delete the shortcut named Once Human from my desktop.'
-
-    Expected:
-      current device resolved correctly
-      Desktop resolved correctly
-      fs.list used
-      Once Human.lnk found
-      no fake device target
-      delete action reaches NEEDS_APPROVAL
-      file remains before approval
-
-    After simulated approval:
-      only Once Human.lnk removed
-    """
-    await setup_test_env_with_fs("asus")
-    gm = GoalManager.get_instance()
-
-    # Seed temporary Desktop fixture
-    desktop_dir = tmp_path / "Desktop"
-    desktop_dir.mkdir()
-    f_once = desktop_dir / "Once Human.lnk"
-    f_once.write_text("game shortcut binary")
-    f_discord = desktop_dir / "Discord.lnk"
-    f_discord.write_text("discord shortcut")
-    f_hw = desktop_dir / "CS211 Homework.pdf"
-    f_hw.write_text("homework pdf")
-    f_rnd = desktop_dir / "random.txt"
-    f_rnd.write_text("random notes")
-
-    set_known_folder_override("desktop", desktop_dir)
-
-    try:
-        user_request = "Delete the shortcut named Once Human from my desktop."
-
-        # 1. Structured Resolution
-        enrolled = await database.list_devices()
-        resolved_entity = TargetResolver.resolve(
-            user_request,
-            current_device="asus",
-            enrolled_devices=enrolled,
-            base_dir=tmp_path,
-        )
-
-        assert resolved_entity.action == "delete"
-        assert resolved_entity.target_device == "asus"
-        assert resolved_entity.target_kind == "filesystem_item"
-        assert resolved_entity.target_name == "Once Human"
-        assert resolved_entity.location == "desktop"
-        assert resolved_entity.target_device != "Once Human"
-
-        sim_agent = SimulatedAgentWebSocket("asus")
-        ctrl = CortexControlLayer({"asus": sim_agent})
-        planner = GoalPlanner.get_instance(control_layer=ctrl, goal_manager=gm)
-        runner = GoalRunner.get_instance(control_layer=ctrl, goal_manager=gm)
-
-        # 2. Plan Goal
-        goal = await gm.create_goal(
-            title="Delete shortcut",
-            original_request=user_request,
-            status="ACTIVE",
-            metadata={"resolved_target": resolved_entity.to_dict()},
-        )
-
-        plan_res = await planner.plan_goal(goal.goal_id, target_device="asus")
-        assert plan_res["status"] == "planned"
-
-        steps = await gm.list_steps(goal.goal_id)
-        assert len(steps) >= 1
-        assert steps[0].capability == "fs.list"
-        assert "shell.run" not in [s.capability for s in steps]
-
-        # 3. Execute Goal -> inspects Desktop -> grounds Once Human.lnk -> creates fs.delete -> triggers approval
-        run_res = await runner.run_goal(goal.goal_id)
-        assert run_res["status"] == "NEEDS_APPROVAL"
-
-        updated_goal = await gm.get_goal(goal.goal_id)
-        assert updated_goal.status == "NEEDS_APPROVAL"
-        assert updated_goal.approval_request_id is not None
-
-        # Verify Once Human.lnk was FOUND and delete step was constructed for it
-        all_steps = await gm.list_steps(goal.goal_id)
-        del_steps = [s for s in all_steps if s.capability == "fs.delete"]
-        assert len(del_steps) == 1
-        assert del_steps[0].arguments["path"] == str(f_once.resolve())
-
-        # CRITICAL SAFETY ASSERTION: File remains before approval
-        assert f_once.exists(), "Safety violation: Once Human.lnk was deleted before approval!"
-        assert f_discord.exists()
-        assert f_hw.exists()
-        assert f_rnd.exists()
-
-        # 4. Simulated Approval
-        await database.resolve_confirmation(updated_goal.approval_request_id, "approved", "admin")
-        await gm.mark_active(goal.goal_id)
-
-        # 5. Execute after approval
-        final_res = await runner.run_goal(goal.goal_id)
-        assert final_res["status"] == "COMPLETED"
-
-        # 6. Verify ONLY Once Human.lnk removed!
-        assert not f_once.exists(), "Once Human.lnk should have been deleted after approval."
-        assert f_discord.exists(), "Discord.lnk must remain untouched."
-        assert f_hw.exists(), "CS211 Homework.pdf must remain untouched."
-        assert f_rnd.exists(), "random.txt must remain untouched."
-
-    finally:
-        clear_known_folder_overrides()
 
 
 # ---------------------------------------------------------------------------
@@ -618,3 +532,5 @@ async def test_production_db_isolation():
 
     # The production database must exist and its hash should remain unchanged during test execution
     assert len(current_hash) == 64
+
+from model_contract_fixtures import PlanModel, plan_step

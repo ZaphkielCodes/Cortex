@@ -12,6 +12,25 @@ from .real_providers import VoskSTTProvider, model as vosk_model
 
 log = logging.getLogger("cortex.voice.groq")
 
+def transcription_uncertain(result):
+    """Use provider quality measurements rather than guessing the intended wording."""
+    import math
+    for segment in result.get("segments") or []:
+        if not isinstance(segment, dict):
+            return True
+        for key, threshold, lower in (("avg_logprob", -1.0, True),
+                                       ("no_speech_prob", .6, False),
+                                       ("compression_ratio", 2.4, False)):
+            value = segment.get(key)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                return True
+            if (value < threshold) if lower else (value > threshold):
+                return True
+    return False
+
+
 class GroqSTTProvider(STTProvider):
     _circuit_broken_until = 0
 
@@ -25,6 +44,11 @@ class GroqSTTProvider(STTProvider):
         self._listening = False
         self._q = None
         self._loop = None
+        self._initial_audio = b""
+        self.last_transcription_uncertain = False
+
+    def set_initial_audio(self, audio):
+        self._initial_audio = bytes(audio)[-96000:]
 
     def _callback(self, indata, frames, time_info, status):
         if self._q and self._loop:
@@ -38,6 +62,8 @@ class GroqSTTProvider(STTProvider):
         return final_text
 
     async def listen_stream(self):
+        self.last_transcription_uncertain = False
+        initial_audio, self._initial_audio = self._initial_audio, b""
         # Check circuit breaker
         if time.time() < type(self)._circuit_broken_until or not self.api_key:
             if not self.api_key:
@@ -45,7 +71,10 @@ class GroqSTTProvider(STTProvider):
             else:
                 log.warning("Groq STT skipped: Circuit breaker active.")
             
-            # Use fallback directly for the entire stream
+            # Use fallback directly for the entire stream, preserving the wake handoff.
+            seed = getattr(self.fallback, "set_initial_audio", None)
+            if callable(seed):
+                seed(initial_audio)
             async for is_final, text in self.fallback.listen_stream():
                 yield is_final, text
             return
@@ -62,6 +91,8 @@ class GroqSTTProvider(STTProvider):
         self._listening = True
         self._loop = asyncio.get_running_loop()
         self._q = asyncio.Queue()
+        for offset in range(0, len(initial_audio), 8000):
+            self._q.put_nowait(initial_audio[offset:offset+8000])
 
         ram_mb = psutil.Process().memory_info().rss / (1024 * 1024)
         log.info(f"[Profiling] Groq (Vosk VAD) STT start | CPU: {psutil.cpu_percent()}% | RAM: {ram_mb:.1f} MB")
@@ -77,6 +108,8 @@ class GroqSTTProvider(STTProvider):
         pre_roll = deque(maxlen=4)
         has_audio = False
         energy_frames = 0
+        quiet_frames = 0
+        captured_seconds = 0.0
         import struct
         import math
 
@@ -85,7 +118,7 @@ class GroqSTTProvider(STTProvider):
         try:
             with sd.RawInputStream(samplerate=16000, blocksize=4000, dtype='int16', channels=1, callback=self._callback):
                 while self._listening:
-                    data = await self._q.get()
+                    data = await asyncio.wait_for(self._q.get(), timeout=10.0)
                     if not self._listening:
                         break
                         
@@ -98,6 +131,8 @@ class GroqSTTProvider(STTProvider):
                     shorts = struct.unpack(fmt, data)
                     rms = math.sqrt(sum(s*s for s in shorts) / len(shorts)) if shorts else 0
 
+                    captured_seconds += len(data) / 32000.0
+                    quiet_frames = quiet_frames + 1 if has_spoken and rms < 300 else 0
                     if not has_audio and rms > 150:
                         has_audio = True
                         log.info(f"[Latency] Non-silent audio first observed: {time.monotonic() - t0:.3f}s (rms={rms:.1f})")
@@ -129,9 +164,8 @@ class GroqSTTProvider(STTProvider):
                                     audio_buffer.write(pr_chunk)
                                 pre_roll.clear()
                             silence_chunks = 0
-                            # End of utterance detected by Vosk natively
-                            log.info(f"[Latency] Last speech detected: {time.monotonic() - t0:.3f}s")
-                            break
+                            # Vosk endpoints are advisory; retain speech following a short pause.
+                            log.info(f"[Latency] Vosk speech segment ended: {time.monotonic() - t0:.3f}s")
                     else:
                         partial = json.loads(rec.PartialResult())
                         pt = partial.get("partial", "")
@@ -148,7 +182,7 @@ class GroqSTTProvider(STTProvider):
                             silence_chunks += 1
                             
                     # Timeout/end-of-utterance: ~1.25 seconds of silence
-                    if has_spoken and silence_chunks > 5:
+                    if has_spoken and (quiet_frames > 5 or captured_seconds >= 30.0):
                         log.info(f"[Latency] Last speech detected: {time.monotonic() - t0:.3f}s (estimated)")
                         res = json.loads(rec.FinalResult())
                         if res.get("text"):
@@ -156,7 +190,7 @@ class GroqSTTProvider(STTProvider):
                         break
                         
                     # Absolute timeout if no speech
-                    if not has_spoken and silence_chunks > 40:
+                    if not has_spoken and captured_seconds >= 10.0:
                         yield True, ""
                         return
 
@@ -166,6 +200,10 @@ class GroqSTTProvider(STTProvider):
             self._listening = False
             return
 
+        if not self._listening:
+            # An interrupted capture must not upload abandoned audio or issue a command.
+            yield True, ""
+            return
         t_endpoint = time.monotonic()
         log.info(f"[Latency] Utterance committed: {t_endpoint - t0:.3f}s")
         self._listening = False
@@ -192,10 +230,11 @@ class GroqSTTProvider(STTProvider):
         log.info(f"[Latency] Groq request: {t_groq_req - t0:.3f}s")
         
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15.0)) as session:
                 form = aiohttp.FormData()
                 form.add_field('file', wav_data, filename='audio.wav', content_type='audio/wav')
                 form.add_field('model', 'whisper-large-v3')
+                form.add_field('response_format', 'verbose_json')
                 stt_lang = os.environ.get("CORTEX_STT_LANGUAGE", "en")
                 if stt_lang and stt_lang.lower() not in ("auto", "none"):
                     form.add_field('language', stt_lang)
@@ -209,6 +248,7 @@ class GroqSTTProvider(STTProvider):
                     if resp.status == 200:
                         result = await resp.json()
                         groq_text = result.get("text", "").strip()
+                        self.last_transcription_uncertain = transcription_uncertain(result)
                         log.info(f"[Latency] Stable transcript produced: {time.monotonic() - t0:.3f}s")
                         
                         import re
@@ -220,8 +260,7 @@ class GroqSTTProvider(STTProvider):
                         yield True, groq_text
                         return
                     else:
-                        err_text = await resp.text()
-                        log.warning(f"Groq API error ({resp.status}): {err_text}")
+                        log.warning("Groq transcription request failed with HTTP %s", resp.status)
                         # Circuit breaking on auth/quota errors
                         if resp.status in (401, 403, 429):
                             log.warning("Groq STT circuit breaker activated for 60 seconds.")

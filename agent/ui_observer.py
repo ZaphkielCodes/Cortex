@@ -182,11 +182,9 @@ class UIObserver:
                     user32.GetWindowTextW(hwnd, title, len(title))
                     rect = wintypes.RECT()
                     user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                    pid = wintypes.DWORD()
-                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                    import psutil
-                    return {"window_id": int(hwnd), "window_title": title.value,
-                            "foreground_app": psutil.Process(pid.value).name().removesuffix(".exe"),
+                    from .window_identity import window_identity
+                    identity = window_identity(hwnd, user32)
+                    return {"window_id": int(hwnd), "window_title": title.value, **identity,
                             "window_bounds": [rect.left, rect.top, rect.right-rect.left, rect.bottom-rect.top]}
             except Exception:
                 pass
@@ -197,6 +195,7 @@ class UIObserver:
         if window:
             bounds = window.get("bounds") or {}
             return {"window_id": window.get("window_id"), "window_title": window.get("title", ""),
+                    "pid":window.get("pid"),
                     "foreground_app": window.get("process_name", ""),
                     "window_bounds": [bounds.get(k, 0) for k in ("x", "y", "width", "height")]}
         return {"window_id": None, "window_title": "", "foreground_app": "Unknown", "window_bounds": None}
@@ -223,6 +222,15 @@ class UIObserver:
             metadata["runtime_id"] = list(item.GetRuntimeId())
         except Exception:
             pass
+        for pattern_id, interface, attribute, key in (
+            (10010,"IUIAutomationSelectionItemPattern","CurrentIsSelected","selected"),
+            (10015,"IUIAutomationTogglePattern","CurrentToggleState","toggle_state"),
+            (10005,"IUIAutomationExpandCollapsePattern","CurrentExpandCollapseState","expand_state")):
+            try:
+                pattern = item.GetCurrentPattern(pattern_id).QueryInterface(getattr(self._uia_module,interface))
+                metadata[key] = getattr(pattern,attribute)
+            except Exception:
+                pass
         text = ""
         editable = role in ("input", "edit")
         try:
@@ -252,6 +260,22 @@ class UIObserver:
             return None
         return UIElement(element_id=f"el_{index}", role=role, label=label or role.capitalize(),
                          text=text, bounds=bounds, enabled=bool(prop("CurrentIsEnabled", False)), metadata=metadata)
+
+    def element_is_current(self, observation, element, max_bounds_diff=8):
+        """Check the selected control again immediately before native input."""
+        current = self._extract_accessibility_elements(observation.window_id, observation.screen_size)
+        runtime_id = element.metadata.get("runtime_id")
+        if runtime_id:
+            matches = [e for e in current if e.metadata.get("runtime_id") == runtime_id]
+        else:
+            automation_id = element.metadata.get("automation_id")
+            matches = [e for e in current if e.role == element.role and e.label == element.label
+                and (not automation_id or e.metadata.get("automation_id") == automation_id)]
+        if len(matches) != 1:
+            return False
+        live = matches[0]
+        return live.enabled and live.role == element.role and live.label == element.label and all(
+            abs(old-new) <= max_bounds_diff for old,new in zip(element.bounds, live.bounds))
 
     def _extract_accessibility_elements(self, hwnd, screen_size):
         # UIA COM interfaces belong to the calling thread. Observation may run
@@ -284,6 +308,8 @@ class UIObserver:
         if not self._uia_client or not observation.window_id or not element.metadata.get("runtime_id"):
             return False
         if self._get_active_window_info().get("window_id") != observation.window_id:
+            return False
+        if not self.element_is_current(observation, element):
             return False
         try:
             root = self._uia_client.ElementFromHandle(observation.window_id)
@@ -374,7 +400,7 @@ class UIObserver:
     async def observe(
         self,
         target_device: str = "asus",
-        include_tree: bool = True,
+        include_tree: bool = False,
         include_vision: bool = False,
         target_window_id: Optional[int] = None,
         mode: str = "full",
@@ -415,6 +441,11 @@ class UIObserver:
 
         obs_id = f"obs_{uuid.uuid4().hex[:8]}"
         fg_app = win_info.get("foreground_app", "Desktop")
+        checked = self._get_active_window_info(win_info.get("window_id"))
+        identity_consistent = bool(win_info.get("window_id")) and all(
+            checked.get(key) == win_info.get(key) for key in ("window_id", "pid", "foreground_app"))
+        if not identity_consistent:
+            elements = []  # A raced tree must never be uploaded or used for grounding.
         w_title = win_info.get("window_title", "")
         summary = f"Foreground: {fg_app} ('{w_title}') with {len(elements)} actionable UI elements."
 
@@ -426,10 +457,12 @@ class UIObserver:
             foreground_app=fg_app,
             window_title=w_title,
             window_id=win_info.get("window_id"),
+            pid=win_info.get("pid"), process_name=fg_app,
             window_bounds=win_info.get("window_bounds"),
             summary=summary,
             elements=elements,
-            provenance={"extracted_in_sec": round(time.monotonic() - t0, 3)},
+            provenance={"identity_consistent":identity_consistent,"extracted_in_sec": round(time.monotonic() - t0, 3),
+                "window_identity": {key: win_info[key] for key in ("pid", "host_pid", "host_app", "identity_source") if key in win_info}},
         )
 
         self._store_observation(observation)
@@ -463,6 +496,7 @@ class UIObserver:
         observation_id: str,
         target_window_id: Optional[int] = None,
         max_bounds_diff: int = 60,
+        max_age_seconds: float = 30,
     ) -> Tuple[bool, str]:
         """
         Fencing validation: verifies that the UI state has not materially changed
@@ -473,8 +507,22 @@ class UIObserver:
         if not obs:
             return False, f"Observation '{observation_id}' not found in active observation cache."
 
-        # Query live window state
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(obs.timestamp)).total_seconds()
+        except (TypeError, ValueError):
+            return False, "Observation timestamp is invalid."
+        if age < -2 or age > max_age_seconds:
+            return False, "Observation expired; observe again."
+        foreground = self._get_active_window_info()
+        if obs.window_id and foreground.get("window_id") != obs.window_id:
+            return False, "Foreground window identity changed; observe again."
+        # Query the exact target as well: another window from the same app is not interchangeable.
         current_win = self._get_active_window_info(target_window_id or obs.window_id)
+        if obs.window_id and current_win.get("window_id") != obs.window_id:
+            return False, "Observed window disappeared or changed identity."
+        expected_pid = obs.pid or obs.provenance.get("window_identity", {}).get("pid")
+        if expected_pid and current_win.get("pid") != expected_pid:
+            return False, "Observed process identity changed; observe again."
 
         # Check if foreground app or window title changed
         cur_app = (current_win.get("foreground_app") or "").lower()
@@ -509,7 +557,7 @@ class UIObserver:
 
 def observe_ui_sync(
     target_device: str = "asus",
-    include_tree: bool = True,
+    include_tree: bool = False,
     include_vision: bool = False,
     target_window_id: Optional[int] = None,
 ) -> UIObservation:

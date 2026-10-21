@@ -27,6 +27,7 @@ import time
 import uuid
 import re
 import logging
+import functools
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
@@ -98,6 +99,7 @@ class InteractionTrace:
     
     # Derived stage durations (in seconds)
     stage_durations: Dict[str, float] = field(default_factory=dict)
+    model_attempts: list = field(default_factory=list)
     
     # Key totals
     total_wake_to_first_audio: Optional[float] = None
@@ -110,6 +112,10 @@ class InteractionTrace:
     def record_stage(self, stage: str, t_mono: Optional[float] = None, t_wall: Optional[str] = None):
         """Record a stage timestamp using monotonic clock by default."""
         mono_val = time.monotonic() if t_mono is None else t_mono
+        if stage == "model_request_started":
+            for key in ("model_first_token", "model_complete"):
+                self.timestamps.pop(key, None)
+                self.wall_clock_timestamps.pop(key, None)
         self.timestamps[stage] = mono_val
         self.wall_clock_timestamps[stage] = (
             datetime.now(timezone.utc).isoformat() if t_wall is None else t_wall
@@ -130,15 +136,14 @@ class InteractionTrace:
             self.stage_durations["routing_latency"] = round(ts["routing_complete"] - ts["hub_request_received"], 4)
 
         # Stage: LLM TTFT (Time To First Token)
-        if "model_first_token" in ts and "model_request_started" in ts:
-            self.stage_durations["llm_ttft"] = round(ts["model_first_token"] - ts["model_request_started"], 4)
-        elif "model_complete" in ts and "model_request_started" in ts and "model_first_token" not in ts:
-            # For non-streaming requests, TTFT equals total generation latency
-            self.stage_durations["llm_ttft"] = round(ts["model_complete"] - ts["model_request_started"], 4)
-
-        # Stage: LLM Total latency
-        if "model_complete" in ts and "model_request_started" in ts:
-            self.stage_durations["llm_total_latency"] = round(ts["model_complete"] - ts["model_request_started"], 4)
+        def duration(start, end):
+            return round(end-start, 4) if start is not None and end is not None and end >= start else None
+        self.stage_durations["llm_ttft"] = duration(ts.get("model_request_started"), ts.get("model_first_token"))
+        if self.model_attempts:
+            measured = [duration(a.get("model_request_started"), a.get("ended_at", a.get("model_complete"))) for a in self.model_attempts]
+            self.stage_durations["llm_total_latency"] = round(sum(v for v in measured if v is not None),4) if any(v is not None for v in measured) else None
+        else:
+            self.stage_durations["llm_total_latency"] = duration(ts.get("model_request_started"), ts.get("model_complete"))
 
         # Stage: TTS first-audio latency
         if "tts_first_audio" in ts and "tts_request_started" in ts:
@@ -173,6 +178,7 @@ class InteractionTrace:
             "timestamps": self.timestamps,
             "wall_clock_timestamps": self.wall_clock_timestamps,
             "stage_durations": self.stage_durations,
+            "model_attempts": self.model_attempts,
             "total_wake_to_first_audio": self.total_wake_to_first_audio,
             "total_speech_end_to_first_audio": self.total_speech_end_to_first_audio,
             "internal_error": self.internal_error,
@@ -195,6 +201,7 @@ class InteractionTrace:
             timestamps=d.get("timestamps", {}),
             wall_clock_timestamps=d.get("wall_clock_timestamps", {}),
             stage_durations=d.get("stage_durations", {}),
+            model_attempts=d.get("model_attempts", []),
             total_wake_to_first_audio=d.get("total_wake_to_first_audio"),
             total_speech_end_to_first_audio=d.get("total_speech_end_to_first_audio"),
             internal_error=d.get("internal_error"),
@@ -219,9 +226,9 @@ class InteractionTrace:
             parts.append(f"stt={dur['stt_latency']:.3f}s")
         if "routing_latency" in dur:
             parts.append(f"routing={dur['routing_latency']:.3f}s")
-        if "llm_ttft" in dur:
+        if dur.get("llm_ttft") is not None:
             parts.append(f"ttft={dur['llm_ttft']:.3f}s")
-        if "llm_total_latency" in dur:
+        if dur.get("llm_total_latency") is not None:
             parts.append(f"llm_tot={dur['llm_total_latency']:.3f}s")
         if "tts_first_audio_latency" in dur:
             parts.append(f"tts_fa={dur['tts_first_audio_latency']:.3f}s")
@@ -231,3 +238,64 @@ class InteractionTrace:
             parts.append(f"wake->first_audio={self.total_wake_to_first_audio:.3f}s")
 
         log.info(" | ".join(parts))
+
+
+class _AttemptTrace:
+    """A late or failed transport can update only its own timing record."""
+    def __init__(self, owner, attempt):
+        object.__setattr__(self, "owner", owner)
+        object.__setattr__(self, "attempt", attempt)
+
+    def __getattr__(self, key):
+        return getattr(self.owner, key)
+
+    def __setattr__(self, key, value):
+        setattr(self.owner, key, value)
+
+    def record_stage(self, stage, t_mono=None, t_wall=None):
+        if stage.startswith("model_"):
+            self.attempt[stage] = time.monotonic() if t_mono is None else t_mono
+            if self.owner.model_attempts[-1] is not self.attempt:
+                return
+        self.owner.record_stage(stage, t_mono, t_wall)
+
+
+def observe_model_attempt(method):
+    """Instrumentation only: arguments/results/errors and routing remain unchanged."""
+    @functools.wraps(method)
+    async def wrapped(provider, user_text, context, *args, **kwargs):
+        trace = context.get("trace")
+        metrics = context.get("latency_metrics")
+        local_metrics = {} if metrics is not None else None
+        scoped = dict(context)
+        if local_metrics is not None:
+            for key in ("model_request_started", "model_first_token", "model_complete"):
+                metrics.pop(key, None)
+            scoped["latency_metrics"] = local_metrics
+        attempt = {"provider":provider.name, "model":provider.model,
+                   "model_request_started":time.monotonic(), "model_first_token":None,
+                   "model_complete":None, "status":"running"}
+        if metrics is not None:
+            if isinstance(trace, InteractionTrace):
+                metrics["model_attempts"] = trace.model_attempts
+            else:
+                metrics.setdefault("model_attempts", []).append(attempt)
+        if isinstance(trace, InteractionTrace):
+            trace.model_attempts.append(attempt)
+            scoped["trace"] = _AttemptTrace(trace, attempt)
+            trace.record_stage("model_request_started", attempt["model_request_started"])
+        try:
+            result = await method(provider, user_text, scoped, *args, **kwargs)
+            attempt["status"] = "succeeded"
+            return result
+        except BaseException as exc:
+            attempt["status"] = "cancelled" if type(exc).__name__ == "CancelledError" else "failed"
+            raise
+        finally:
+            attempt["ended_at"] = time.monotonic()
+            if local_metrics is not None:
+                attempt.update({key:local_metrics[key] for key in ("model_request_started","model_first_token","model_complete") if key in local_metrics})
+            if metrics is not None:
+                if metrics["model_attempts"][-1] is attempt:
+                    metrics.update(local_metrics)
+    return wrapped

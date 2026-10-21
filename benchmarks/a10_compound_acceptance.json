@@ -1,0 +1,20 @@
+[
+  {
+    "id": "layout_change",
+    "category": "compound UI acceptance",
+    "prompt": "Start Calculator and use its mode picker to enter the scientific layout. Leave the displayed number as it was and verify the final layout.",
+    "deadline_seconds": 360
+  },
+  {
+    "id": "canvas_dimensions",
+    "category": "compound UI acceptance",
+    "prompt": "In Paint, create a fresh blank canvas whose image dimensions are 640 pixels wide and 480 pixels high. Leave this test image unsaved and verify both dimensions.",
+    "deadline_seconds": 360
+  },
+  {
+    "id": "unsent_document",
+    "category": "compound UI acceptance",
+    "prompt": "Make a fresh Notepad document containing exactly two lines: amber on the first line and cobalt on the second. Keep it as an unsaved draft and check the text after entering it.",
+    "deadline_seconds": 360
+  }
+]

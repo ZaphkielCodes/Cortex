@@ -117,38 +117,9 @@ log = logging.getLogger(__name__)
 
 
 def sanitize_for_speech(text: Optional[str]) -> str:
-    """
-    Sanitize text intended for VoiceResponseMessage (TTS).
-    Never speak raw JSON, capability arrays, stack traces, filesystem internals,
-    or supported handler dumps. Detailed diagnostics remain in backend logs.
-    """
-    if not text:
-        return "I encountered an issue processing that request."
-
-    clean = str(text).strip()
-    # Check for handler dumps or capability lists
-    if "Supported:" in clean or ("['" in clean and "']" in clean):
-        log.warning(f"[SpeechSanitizer] Suppressed internal handler dump from speech: {clean}")
-        if "screen" in clean.lower() or "screenshot" in clean.lower():
-            return "I couldn't inspect the screenshot because the screen-analysis action failed."
-        return "I couldn't complete that action because the requested capability is not supported."
-
-    # Check for raw JSON, dict stringifications, or stack traces
-    if (clean.startswith("{") and clean.endswith("}")) or (clean.startswith("[") and clean.endswith("]")) or "Traceback (most recent call last)" in clean:
-        log.warning(f"[SpeechSanitizer] Suppressed raw JSON/traceback from speech: {clean}")
-        return "I encountered a system error while processing that request."
-
-    # Check for raw python exception classes
-    import re
-    if re.search(r"\b(?:KeyError|ValueError|TypeError|AttributeError|FileNotFoundError|Exception):\s*", clean):
-        log.warning(f"[SpeechSanitizer] Suppressed raw python exception from speech: {clean}")
-        if "weather" in clean.lower():
-            return "I couldn't retrieve the weather right now."
-        if "screen" in clean.lower() or "screenshot" in clean.lower():
-            return "I couldn't inspect the screenshot because the screen-analysis action failed."
-        return "I encountered an error while processing that request."
-
-    return clean
+    """Use the same generic internal-error redaction for text and voice delivery."""
+    from .agent_harness import sanitize_for_speech as sanitize
+    return sanitize(text)
 
 # ---------------------------------------------------------------------------
 # Shared state
@@ -266,6 +237,8 @@ async def lifespan(app: FastAPI):
     global task_engine
 
     await init_db()
+    from .integrations.ecosystem import IntegrationRegistry
+    await IntegrationRegistry.get_instance().sync_connections()
     log.info("SQLite database initialised (migrations applied).")
 
     # Reset any stale connected states from prior ungraceful shutdowns
@@ -340,6 +313,9 @@ async def lifespan(app: FastAPI):
 
     if task_engine:
         await task_engine.stop()
+
+    from .request_lifecycle import RequestLifecycle
+    await RequestLifecycle.shutdown()
 
     if _prune_task:
         _prune_task.cancel()
@@ -475,7 +451,7 @@ async def runtime_sleep_endpoint():
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        urllib.request.urlopen(req, timeout=2.0)
+        await asyncio.to_thread(urllib.request.urlopen, req, timeout=2.0)
         return {"status": "success", "message": "Sleep requested from supervisor"}
     except Exception as exc:
         return {"status": "error", "message": f"Could not contact supervisor: {exc}"}
@@ -692,6 +668,12 @@ async def enroll_endpoint(
         role=req.role,
         secret_hash=hashed,
     )
+    # Enrollment is immediately discoverable, but never implies an authenticated worker.
+    from .executor_registry import ExecutorRegistry
+    from .device_handle import DeviceHandle
+    enrolled_row = await get_device(req.device_id)
+    ExecutorRegistry.get_instance().register_device(DeviceHandle.from_db_row(
+        enrolled_row, live_online=False, live_capabilities=[]))
     log.info(f"✦ ENROLLED: '{req.device_id}' as {req.role} (by {x_cortex_device})")
     return EnrollResponse(
         device_id=req.device_id,
@@ -972,151 +954,11 @@ async def agent_endpoint(websocket: WebSocket, device_id: str):
                     log.info(f"[{device_id}] Voice Partial (cmd_id: {msg.command_id}): {msg.text}")
                     # Future: implement speculative LLM generation here.
                 elif envelope.type == "voice_request":
-                    async def handle_voice_request(req_data, req_context):
-                        from .agent_harness import AgentHarness
-                        from .control_layer import CortexControlLayer
-                        
-                        msg = VoiceRequestMessage(**req_data)
-                        log.info(f"[{device_id}] Voice Request (cmd_id: {msg.command_id}): {msg.text}")
-                        
-                        global _agent_harness
-                        harness = _agent_harness
-                        
-                        async def _log_action_cb(src, intent, status, detail):
-                            await log_action(device_id=src, command=intent, result=status, message=detail, command_id=msg.command_id)
-                        
-                        result = await harness.process_request(
-                            source_device_id=device_id,
-                            natural_request=msg.text,
-                            context=req_context,
-                            log_action_callback=_log_action_cb,
-                            latency_metrics=msg.latency_metrics,
-                            on_chunk=None,
-                            request_id=msg.command_id
-                        )
-                        
-                        from .session_context import SessionContextManager
-                        await SessionContextManager.update_session(
-                            device_id,
-                            msg.text,
-                            {"status": result.status, "message": result.message, "data": result.data},
-                            result.action_plan.model_dump() if getattr(result, "action_plan", None) else None,
-                            speaker_info=resolved_speaker
-                        )
-
-                        cmd_id = getattr(result, "command_id", None)
-                        if cmd_id and result.status == "success":
-                            fut = PENDING_FUTURES.get(cmd_id)
-                            if not fut:
-                                fut = asyncio.get_running_loop().create_future()
-                                PENDING_FUTURES[cmd_id] = fut
-                            
-                            try:
-                                log.info(f"Hub awaiting Future resolution | cmd_id={cmd_id[:8]}...")
-                                exec_res = await asyncio.wait_for(fut, timeout=5.0)
-                                log.info(f"[BATTERY TRACE] Hub Future resolved | cmd_id={cmd_id[:8]}... | status={exec_res.status} | message={getattr(exec_res, 'message', None)}")
-                                if exec_res.status != "success":
-                                    result.status = "error"
-                                    result.message = getattr(exec_res, "message", None) or (
-                                        f"Failed to {result.action_plan.user_facing_summary}." if result.action_plan else "That failed."
-                                    )
-                                else:
-                                    # Always replace the generic ack with the actual executor message
-                                    if getattr(exec_res, "message", None):
-                                        log.info(f"[BATTERY TRACE] Overwriting result.message with exec_res.message: {exec_res.message}")
-                                        result.message = exec_res.message
-
-                                    # Parse and persist screenshot reference
-                                    img_ref = None
-                                    if hasattr(exec_res, "data") and isinstance(exec_res.data, dict) and exec_res.data.get("image_ref"):
-                                        img_ref = exec_res.data["image_ref"]
-                                    elif "Screenshot saved: " in getattr(exec_res, "message", ""):
-                                        img_ref = exec_res.message.split("Screenshot saved: ", 1)[1].strip()
-                                    elif "Screenshot taken: " in getattr(exec_res, "message", ""):
-                                        img_ref = exec_res.message.split("Screenshot taken: ", 1)[1].strip()
-                                    if img_ref:
-                                        from .session_context import SessionContextManager
-                                        await SessionContextManager.set_screenshot_ref(device_id, img_ref)
-
-                                    # Authoritative session update with completed execution result
-                                    from .session_context import SessionContextManager
-                                    await SessionContextManager.update_session(
-                                        device_id,
-                                        msg.text,
-                                        {"status": result.status, "message": result.message, "data": getattr(exec_res, "data", None)},
-                                        result.action_plan.model_dump() if getattr(result, "action_plan", None) else None,
-                                        speaker_info=resolved_speaker
-                                    )
-                            except asyncio.TimeoutError:
-                                log.warning(f"[{device_id}] [BATTERY TRACE] Executor result timed out for {cmd_id[:8]}...")
-                                result.status = "error"
-                                result.message = "The command was sent but no confirmation was received in time."
-                            finally:
-                                PENDING_FUTURES.pop(cmd_id, None)
-
-                        elif cmd_id and result.status == "approval_required":
-                            # Register callback so the post-approval executor result triggers a voice reply
-                            PENDING_VOICE_CALLBACKS[cmd_id] = (msg.command_id, websocket)
-                            log.info(f"[{device_id}] Registered post-approval voice callback | exec_cmd={cmd_id[:8]}... voice_cmd={msg.command_id[:8]}...")
-                            
-                            # Create future to wait for CLI confirmation
-                            conf_fut = asyncio.get_running_loop().create_future()
-                            PENDING_FUTURES[cmd_id] = conf_fut
-                            
-                            async def wait_and_dispatch(cid, plan, source_id):
-                                try:
-                                    decision = await asyncio.wait_for(conf_fut, timeout=120.0)
-                                    if decision in ("approve", "approved"):
-                                        target_ws = CONNECTED_DEVICES.get(plan.target_device)
-                                        if target_ws:
-                                            # Dispatch the command; the executor result will fall through to PENDING_VOICE_CALLBACKS
-                                            cmd_msg = CommandMessage(
-                                                command_id=cid, 
-                                                command=plan.action, 
-                                                args=plan.arguments if plan.arguments else {}
-                                            )
-                                            await target_ws.send_text(cmd_msg.model_dump_json())
-                                            log.info(f"[{source_id}] Dispatched post-approval command {plan.action} (id={cid[:8]}...)")
-                                            from .database import update_command_status
-                                            await update_command_status(cid, "dispatched")
-                                except asyncio.TimeoutError:
-                                    log.warning(f"[{source_id}] Confirmation timed out for {cid[:8]}...")
-                                finally:
-                                    PENDING_FUTURES.pop(cid, None)
-                                    
-                            asyncio.create_task(wait_and_dispatch(cmd_id, result.action_plan, device_id))
-                        
-                        plan = getattr(result, "action_plan", None)
-                        # Always use the real executor message as the spoken text (never just the summary ack)
-                        # Only for approval_required do we send the ack — the real result will arrive later
-                        summary = None  # Never speak a generic summary; use the actual result message
-                        
-                        resp = VoiceResponseMessage(
-                            command_id=msg.command_id,
-                            message=sanitize_for_speech(result.message),
-                            summary=summary,
-                            status=result.status,
-                            data=result.data,
-                            task_id=(result.data or {}).get("task_id"),
-                            request_id=msg.command_id,
-                            latency_metrics=getattr(result, "latency_metrics", msg.latency_metrics)
-                        )
-                        await websocket.send_text(resp.model_dump_json())
-
-                    from .context import ContextManager
-                    from .speakers import SpeakerManager
-                    req_msg = VoiceRequestMessage(**data)
-                    speaker_hint = req_msg.speaker_id or req_msg.speaker_label or (req_msg.speaker_metadata.get("speaker") if req_msg.speaker_metadata else None)
-                    resolved_speaker = await SpeakerManager.resolve_speaker(
-                        speaker_hint=speaker_hint,
-                        audio_metadata=req_msg.speaker_metadata
-                    )
-                    req_context = await ContextManager.get_active_context(
-                        device_id=device_id,
-                        request=req_msg.text,
-                        speaker_info=resolved_speaker
-                    )
-                    asyncio.create_task(handle_voice_request(data, req_context))
+                    # Preparation must not block command results, approvals or heartbeats.
+                    msg = VoiceRequestMessage(**data)
+                    job = asyncio.create_task(_process_voice_request(websocket, device_id, msg))
+                    _voice_request_handlers.add(job)
+                    job.add_done_callback(_voice_request_done)
                 elif envelope.type == "confirmation_response":
                     await _handle_confirmation_response(websocket, data, device_id)
                 else:
@@ -1144,6 +986,39 @@ async def agent_endpoint(websocket: WebSocket, device_id: str):
 # ---------------------------------------------------------------------------
 # CLI WebSocket — /ws-cli (authenticated since Phase 3)
 # ---------------------------------------------------------------------------
+_voice_request_handlers = set()
+
+
+def _voice_request_done(job):
+    _voice_request_handlers.discard(job)
+    if not job.cancelled() and job.exception():
+        log.warning("voice_request_delivery_failed reason=%s", type(job.exception()).__name__)
+
+
+async def _process_voice_request(websocket, device_id, msg):
+    from .context import ContextManager
+    from .speakers import SpeakerManager
+    from .request_lifecycle import RequestLifecycle
+    async def prepare():
+        speaker_hint = msg.speaker_id or msg.speaker_label or (msg.speaker_metadata or {}).get("speaker")
+        speaker = await SpeakerManager.resolve_speaker(speaker_hint=speaker_hint, audio_metadata=msg.speaker_metadata)
+        return await ContextManager.get_active_context(device_id=device_id, request=msg.text, speaker_info=speaker)
+    async def deliver(task_id, result):
+        target = CONNECTED_DEVICES.get(device_id) or websocket
+        await target.send_text(VoiceResponseMessage(command_id=task_id, request_id=msg.command_id,
+            task_id=task_id, is_task_result=True, status=result.status,
+            message=sanitize_for_speech(result.message), data=result.data,
+            latency_metrics=result.latency_metrics or {}).model_dump_json())
+    async def audit(src, intent, status, detail):
+        await log_action(device_id=src, command=intent, result=status, message=detail, command_id=msg.command_id)
+    result = await RequestLifecycle.submit(device_id, msg.command_id, msg.text, prepare, _agent_harness,
+        channel="voice", deliver=deliver, latency_metrics=msg.latency_metrics, log_action_callback=audit)
+    await websocket.send_text(VoiceResponseMessage(command_id=msg.command_id, request_id=msg.command_id,
+        task_id=(result.data or {}).get("task_id"), status=result.status,
+        message=sanitize_for_speech(result.message), data=result.data,
+        latency_metrics=result.latency_metrics or {}).model_dump_json())
+
+
 @app.websocket("/ws-cli")
 async def cli_endpoint(websocket: WebSocket):
     """
@@ -1523,6 +1398,20 @@ async def _resolve_command_id(prefix: str) -> str | None:
 async def _execute_resolve_confirmation(command_id: str, decision: str, resolver_id: str) -> tuple[bool, str]:
     """Execute approval or denial of a pending confirmation."""
     full_id = command_id
+    from .database import get_confirmation
+    confirmation = await get_confirmation(full_id)
+    if not confirmation and len(command_id) < 32:
+        full_id = await _resolve_command_id(command_id) or command_id
+        confirmation = await get_confirmation(full_id)
+    if confirmation and confirmation.get("command") == "model.share":
+        if confirmation.get("requested_by") != resolver_id:
+            return False, "Only the requesting device can approve this cloud-sharing request."
+        if full_id not in PENDING_FUTURES or PENDING_FUTURES[full_id].done():
+            await resolve_confirmation(full_id, "expired", "system")
+            return False, "This cloud-sharing request is no longer active."
+        decision = {"approve": "approved", "deny": "denied"}.get(decision, decision)
+        if decision not in ("approved", "denied"):
+            return False, "Choose approve or deny."
     row = await resolve_confirmation(full_id, decision, resolver_id)
     if not row and len(command_id) < 32:
         resolved = await _resolve_command_id(command_id)

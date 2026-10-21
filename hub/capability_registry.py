@@ -36,6 +36,7 @@ class RegisteredCapability:
     target_type: str = "device"  # "hub" or "device"
     permission_tier: int = 1
     availability: bool = True
+    result_source: Optional[str] = None  # Execution provenance category, never NL routing.
     provider: Optional[str] = None
     provider_status: Dict[str, Any] = field(default_factory=dict)
     side_effect_class: Optional[str] = None  # "none", "state_change", "filesystem", "system", "destructive"
@@ -101,6 +102,9 @@ class CanonicalCapabilityRegistry:
 
     def _refresh_dynamic_providers(self) -> None:
         """Dynamically update capability availability based on live providers."""
+        from .integrations.ecosystem import IntegrationRegistry
+        for cap in IntegrationRegistry.get_instance().canonical_capabilities():
+            self._capabilities[cap.name] = cap
         try:
             from .weather_provider import get_weather_provider
             wp = get_weather_provider()
@@ -143,7 +147,7 @@ class CanonicalCapabilityRegistry:
     def list_capabilities(self) -> List[RegisteredCapability]:
         """Return list of all registered capabilities."""
         self._refresh_dynamic_providers()
-        return list(self._capabilities.values())
+        return sorted(self._capabilities.values(),key=lambda c:-c.provider_status.get("preference",0) if c.availability else 0)
 
     def get_all(self) -> Dict[str, RegisteredCapability]:
         """Return dictionary of all registered capabilities."""
@@ -163,7 +167,7 @@ class CanonicalCapabilityRegistry:
         if filter_supported is not None:
             supported_set = set(filter_supported)
             caps = [c for c in caps if c.name in supported_set or c.target_type == "hub"]
-        return caps
+        return sorted(caps,key=lambda c:-c.provider_status.get("preference",0))
 
     def validate_call(
         self,
@@ -213,6 +217,7 @@ class CanonicalCapabilityRegistry:
             # Web & Search
             "web.search": RegisteredCapability(
                 name="web.search",
+                result_source="live_search",
                 description="Search the live web using a search provider and return top results with URLs and snippets.",
                 arguments={
                     "query": {"type": "string", "required": True, "description": "Search query keywords"},
@@ -247,6 +252,7 @@ class CanonicalCapabilityRegistry:
             ),
             "weather.current": RegisteredCapability(
                 name="weather.current",
+                result_source="live_weather",
                 description="Get real-time current weather conditions for a specified location.",
                 arguments={
                     "location": {"type": "string", "required": True, "description": "City or location name to query"},
@@ -263,6 +269,7 @@ class CanonicalCapabilityRegistry:
             ),
             "weather.forecast": RegisteredCapability(
                 name="weather.forecast",
+                result_source="live_weather",
                 description="Get multi-day weather forecast for a specified location.",
                 arguments={
                     "location": {"type": "string", "required": True, "description": "City or location name to query"},
@@ -349,10 +356,10 @@ class CanonicalCapabilityRegistry:
             # General Computer Use (Phase A10)
             "ui.observe": RegisteredCapability(
                 name="ui.observe",
-                description="Inspect desktop UI returning structured accessibility tree elements, foreground window metadata, and vision perception.",
+                description="Read foreground app metadata by default. Explicitly request include_tree=true for interactive controls.",
                 arguments={
                     "target_device": {"type": "string", "required": False, "description": "Target device ID"},
-                    "include_tree": {"type": "boolean", "required": False, "description": "Whether to extract OS accessibility elements (default True)"},
+                    "include_tree": {"type": "boolean", "required": False, "description": "Whether to extract OS accessibility elements (default False; explicit opt-in)"},
                     "include_vision": {"type": "boolean", "required": False, "description": "Whether to include multimodal vision perception fallback"},
                     "target_window_id": {"type": "integer", "required": False, "description": "Optional specific window HWND to inspect"},
                     "mode": {"type": "string", "required": False, "description": "Observation mode: 'full' or 'fast'"},
@@ -560,7 +567,7 @@ class CanonicalCapabilityRegistry:
             ),
             "ui.wait": RegisteredCapability(
                 name="ui.wait",
-                description="Bounded wait for interface updates or asynchronous UI operations to complete.",
+                description="Sleep for a bounded duration in seconds, returning only after the pause elapses (maximum 30 seconds).",
                 arguments={
                     "seconds": {"type": "number", "required": False, "description": "Duration to wait in seconds (default 1.0, max 30.0)"},
                     "target_device": {"type": "string", "required": False, "description": "Target device ID"},
@@ -639,9 +646,10 @@ class CanonicalCapabilityRegistry:
             ),
             "app.launch": RegisteredCapability(
                 name="app.launch",
-                description="Launch an application and verify its process and window appearance.",
+                description="Launch an application, verify its process/window and activate its window unless activate=false.",
                 arguments={
                     "app": {"type": "string", "required": True, "description": "Application display name, alias, or executable target"},
+                    "activate": {"type":"boolean","required":False,"description":"Bring the launched window to foreground (default True). False launches without changing focus."},
                     "target_device": {"type": "string", "required": False, "description": "Target device ID"},
                 },
                 risk="medium",
@@ -692,6 +700,7 @@ class CanonicalCapabilityRegistry:
                 name="window.focus",
                 description="Restore if minimized and switch foreground focus to the target window.",
                 arguments={
+                    "pid": {"type": "integer", "required": False, "description": "Observed process identity; rejects a recycled handle owned by another process"},
                     "window_id": {"type": "integer", "required": False, "description": "Target window handle / ID"},
                     "title": {"type": "string", "required": False, "description": "Window title to match"},
                     "process": {"type": "string", "required": False, "description": "Process name to match"},
@@ -982,7 +991,7 @@ class CanonicalCapabilityRegistry:
             # Goals & Wait Conditions
             "goal.wait": RegisteredCapability(
                 name="goal.wait",
-                description="Pause execution and persist a wait condition until satisfied.",
+                description="Check whether a goal condition is satisfied. GoalRunner persists unsatisfied conditions; this call does not sleep.",
                 arguments={
                     "condition_type": {"type": "string", "required": True, "description": "Condition type: 'world_state', 'device_online', 'time'"},
                     "condition_key": {"type": "string", "required": True, "description": "Condition key or device ID to monitor"},
@@ -1077,6 +1086,12 @@ class CanonicalCapabilityRegistry:
             ),
 
             # Phase A4: System Registry & Self-Knowledge
+            "system.runtime_state": RegisteredCapability(
+                name="system.runtime_state",
+                description="Inspect the requesting device's tasks, execution ownership, handoff/wait metadata, transfer progress and current privacy policy.",
+                arguments={}, risk="low", classification="read", target_type="hub", permission_tier=1,
+                provider="runtime_introspection", side_effect_class="none",
+                privacy_metadata={"privacy_class": "SENSITIVE"}),
             "system.identity": RegisteredCapability(
                 name="system.identity",
                 description="Inspect Cortex product identity, version, architecture mode, and node role.",
@@ -1730,6 +1745,11 @@ class CanonicalCapabilityRegistry:
             ),
         }
 
+        caps["hub.transfer_file"] = RegisteredCapability(
+            name="hub.transfer_file", description="Copy a real file between enrolled workers over paired TLS. Destination is relative to the receiver's configured folder; never overwrites or deletes the source.",
+            arguments={key: {"type": "string", "required": True} for key in
+                       ("source_device", "destination_device", "source_path", "destination_path")},
+            target_type="hub", permission_tier=2, risk="high", classification="write", side_effect_class="filesystem")
         self._capabilities = caps
 
 

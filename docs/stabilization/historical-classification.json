@@ -1,0 +1,184 @@
+[
+  {
+    "nodeid": "tests/test_phase_a5.py::test_physical_1_local_default",
+    "failure": "E   AssertionError: assert 'error' == 'success'\n      \n      - success\n      + error",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "Model output and enrollment/capability advertisement must be explicit in an offline wiring test. The overridden OS boundary and source executor selection remain tested.",
+    "changed_test_explanation": "Model output and enrollment/capability advertisement must be explicit in an offline wiring test. The overridden OS boundary and source executor selection remain tested."
+  },
+  {
+    "nodeid": "tests/test_phase_a5.py::test_physical_2_explicit_remote_device",
+    "failure": "E   AssertionError: assert 'error' == 'success'\n      \n      - success\n      + error",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "Inject an exact canonical model decision and advertise worker capabilities; retain the assertion that Lenovo alone receives the action.",
+    "changed_test_explanation": "Inject an exact canonical model decision and advertise worker capabilities; retain the assertion that Lenovo alone receives the action."
+  },
+  {
+    "nodeid": "tests/test_phase_a5.py::test_physical_3_device_capability_mismatch",
+    "failure": "E   AssertionError: assert ('does not support' in 'The AI provider is not configured. Set a supported provider and its API key in Cortex settings.' or 'unsupported' in 'the ai provider is not configured. set a supported provider and its api key in cortex settings.')\n     +  where 'The AI provider is not configured. Set a supported provider and its API key in Cortex settings.' = ConversationalResponse(status='error', message='The AI provider is not configured. Set a supported provider and its AP...': 'The AI provider is not configured. Set a supported provider and its API key in Cortex settings.'}, provenance=None).message\n     +  and   'the ai provider is not configured. set a supported provider and its api key in cortex settings.' = <built-in method lower of str object at 0x000002478C5CFAB0>()\n     +    where <built-in method lower of str object at 0x000002478C5CFAB0> = 'The AI provider is not configured. Set a supported provider and its API key in Cortex settings.'.lower\n     +      where 'The AI provider is not configured. Set a supported provider and its API key in Cortex settings.' = ConversationalResponse(status='error', message='The AI provider is not configured. Set a supported provider and its AP...': 'The AI provider is not configured. Set a supported provider and its API key in Cortex settings.'}, provenance=None).message",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "Inject the requested capability/target; a policy denial is a valid terminal result. The selector must still reject capability mismatch with no fallback.",
+    "changed_test_explanation": "Inject the requested capability/target; a policy denial is a valid terminal result. The selector must still reject capability mismatch with no fallback."
+  },
+  {
+    "nodeid": "tests/test_phase_a5.py::test_physical_4_offline_device",
+    "failure": "E   AssertionError: assert 'offline' in 'the ai provider is not configured. set a supported provider and its api key in cortex settings.'\n     +  where 'the ai provider is not configured. set a supported provider and its api key in cortex settings.' = <built-in method lower of str object at 0x000002478C5CFAB0>()\n     +    where <built-in method lower of str object at 0x000002478C5CFAB0> = 'The AI provider is not configured. Set a supported provider and its API key in Cortex settings.'.lower\n     +      where 'The AI provider is not configured. Set a supported provider and its API key in Cortex settings.' = ConversationalResponse(status='error', message='The AI provider is not configured. Set a supported provider and its AP...': 'The AI provider is not configured. Set a supported provider and its API key in Cortex settings.'}, provenance=None).message",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "Managed turns now wait durably for an enrolled offline executor rather than immediately failing. The test checks WAITING then cancellation without executing elsewhere.",
+    "changed_test_explanation": "Managed turns now wait durably for an enrolled offline executor rather than immediately failing. The test checks WAITING then cancellation without executing elsewhere."
+  },
+  {
+    "nodeid": "tests/test_phase_a5.py::test_physical_5_capability_discovery",
+    "failure": "E   AssertionError: assert 'error' == 'success'\n      \n      - success\n      + error",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "Device inquiry now uses a registry capability selected by the model rather than a regex answer. Existing capable-device filtering assertions remain.",
+    "changed_test_explanation": "Device inquiry now uses a registry capability selected by the model rather than a regex answer. Existing capable-device filtering assertions remain."
+  },
+  {
+    "nodeid": "tests/test_phase_a5.py::test_physical_6_target_ownership",
+    "failure": "E   AssertionError: assert 'error' == 'success'\n      \n      - success\n      + error",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "The model must select the remembered exact path; explicit source enrollment and native execution opt-in replace machine-name shortcuts. Owner selection is still asserted.",
+    "changed_test_explanation": "The model must select the remembered exact path; explicit source enrollment and native execution opt-in replace machine-name shortcuts. Owner selection is still asserted."
+  },
+  {
+    "nodeid": "tests/test_phase_a5.py::test_device_handle_persistence_and_migration",
+    "failure": "E   AssertionError: assert 'admin' == 'primary_admin'\n      \n      - primary_admin\n      + admin",
+    "classification": "OBSOLETE_TEST",
+    "reason": "The old test promoted a device named ASUS and inferred laptop type. Enrollment now preserves the supplied role/type; names confer no authority.",
+    "changed_test_explanation": "The old test promoted a device named ASUS and inferred laptop type. Enrollment now preserves the supplied role/type; names confer no authority."
+  },
+  {
+    "nodeid": "tests/test_phase_a5.py::test_self_knowledge_queries",
+    "failure": "E   AssertionError: assert 'error' == 'success'\n      \n      - success\n      + error",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "Conversational device introspection requires a model/tool boundary. The test now checks source-scoped structured device facts, not canned affirmative wording.",
+    "changed_test_explanation": "Conversational device introspection requires a model/tool boundary. The test now checks source-scoped structured device facts, not canned affirmative wording."
+  },
+  {
+    "nodeid": "tests/test_phase_a6.py::test_11_self_knowledge_queries",
+    "failure": "E   AssertionError: assert 'error' == 'success'\n      \n      - success\n      + error",
+    "classification": "REAL_REGRESSION",
+    "reason": "Execution/ownership/wait metadata lost its model-accessible tool when phrase handlers were removed. Added source-scoped system.runtime_state with actual persisted execution records.",
+    "changed_test_explanation": "Execution/ownership/wait metadata lost its model-accessible tool when phrase handlers were removed. Added source-scoped system.runtime_state with actual persisted execution records."
+  },
+  {
+    "nodeid": "tests/test_phase_a7.py::test_12_self_knowledge_answers_all_5_privacy_questions",
+    "failure": "E   AssertionError: assert 'error' == 'success'\n      \n      - success\n      + error",
+    "classification": "REAL_REGRESSION",
+    "reason": "The model had no structured tool for current privacy policy and private-executor wait state. Added sensitive runtime introspection; it cannot infer authorization from wording.",
+    "changed_test_explanation": "The model had no structured tool for current privacy policy and private-executor wait state. Added sensitive runtime introspection; it cannot infer authorization from wording."
+  },
+  {
+    "nodeid": "tests/test_phase_a8.py::test_16_file_transfer_self_knowledge_queries",
+    "failure": "E   AssertionError: assert 'error' == 'success'\n      \n      - success\n      + error",
+    "classification": "REAL_REGRESSION",
+    "reason": "The primary model path lacked persisted transfer progress/transport facts. Added runtime introspection; assertions inspect actual latest transfer bytes instead of canned yes/no responses.",
+    "changed_test_explanation": "The primary model path lacked persisted transfer progress/transport facts. Added runtime introspection; assertions inspect actual latest transfer bytes instead of canned yes/no responses."
+  },
+  {
+    "nodeid": "tests/test_phase_a10.py::test_failed_verification_triggers_replan",
+    "failure": "E   AssertionError: assert 'failure' == 'verification_failed'\n      \n      - verification_failed\n      + failure",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "A verified executor is mandatory before observing or acting. The component test now names its fake executor; failed verification must still suggest replan.",
+    "changed_test_explanation": "A verified executor is mandatory before observing or acting. The component test now names its fake executor; failed verification must still suggest replan."
+  },
+  {
+    "nodeid": "tests/test_phase_a10.py::test_context_continuity_references",
+    "failure": "E   AssertionError: assert 'click that' == 'el_6'\n      \n      - el_6\n      + click that",
+    "classification": "OBSOLETE_TEST",
+    "reason": "The legacy controller must not translate raw pronouns into stale element IDs or back into a hotkey. Model-selected grounded targets are now required.",
+    "changed_test_explanation": "The legacy controller must not translate raw pronouns into stale element IDs or back into a hotkey. Model-selected grounded targets are now required."
+  },
+  {
+    "nodeid": "tests/test_phase_a10.py::test_approval_integration_and_resolution",
+    "failure": "E   AssertionError: assert 'failure' == 'waiting_for_approval'\n      \n      - waiting_for_approval\n      + failure",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "The bounded UI component needs an explicit executor. High-impact action approval and resolution checks are retained.",
+    "changed_test_explanation": "The bounded UI component needs an explicit executor. High-impact action approval and resolution checks are retained."
+  },
+  {
+    "nodeid": "tests/test_phase_a10.py::test_capability_preference_over_gui_automation",
+    "failure": "E   IndexError: list index out of range",
+    "classification": "OBSOLETE_TEST",
+    "reason": "The deprecated synchronous planner cannot run model inference. Migrated to explicit model decisions selecting native capabilities and verified execution.",
+    "changed_test_explanation": "The deprecated synchronous planner cannot run model inference. Migrated to explicit model decisions selecting native capabilities and verified execution."
+  },
+  {
+    "nodeid": "tests/test_phase_a10.py::test_general_goal_escalation_to_computer_use",
+    "failure": "E   AssertionError: Expected GOAL intent for 'change my display to 60 hertz', got CONVERSATION\n    assert 'CONVERSATION' == 'GOAL'\n      \n      - GOAL\n      + CONVERSATION",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "Legacy GOAL/effect tags and fixed three-step plans are not the AgentTurn contract. The replacement verifies model-driven observation before any guessed UI action.",
+    "changed_test_explanation": "Legacy GOAL/effect tags and fixed three-step plans are not the AgentTurn contract. The replacement verifies model-driven observation before any guessed UI action."
+  },
+  {
+    "nodeid": "tests/test_phase_a10.py::test_compound_goal_decomposition_and_notepad",
+    "failure": "E   AssertionError: assert 'CONVERSATION' == 'GOAL'\n      \n      - GOAL\n      + CONVERSATION",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "Fixed Notepad/Text Editor recipes were removed. Explicit model decisions launch the requested app, then require observed controls before typing.",
+    "changed_test_explanation": "Fixed Notepad/Text Editor recipes were removed. Explicit model decisions launch the requested app, then require observed controls before typing."
+  },
+  {
+    "nodeid": "tests/test_phase_a10.py::test_contextual_computer_use_and_corrections",
+    "failure": "E   AssertionError: assert 'reasoning_unavailable' == 'switch_previous_app'\n      \n      - switch_previous_app\n      + reasoning_unavailable",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "Correction labels and app-name extraction are no longer regex outputs. The replacement checks prior history reaches the model and only its corrected canonical target executes.",
+    "changed_test_explanation": "Correction labels and app-name extraction are no longer regex outputs. The replacement checks prior history reaches the model and only its corrected canonical target executes."
+  },
+  {
+    "nodeid": "tests/test_architecture_repair.py::test_semantic_paraphrases_resolve_to_same_capability",
+    "failure": "E   IndexError: list index out of range",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "Offline tests must inject model decisions rather than expect model-free language inference. It now checks each unchanged request reaches the model and the canonical action executes; comprehension belongs to live evaluation.",
+    "changed_test_explanation": "Offline tests must inject model decisions rather than expect model-free language inference. It now checks each unchanged request reaches the model and the canonical action executes; comprehension belongs to live evaluation."
+  },
+  {
+    "nodeid": "tests/test_architecture_repair.py::test_target_grounding_happens_after_semantic_interpretation",
+    "failure": "E   AssertionError: assert [] == ['app.close']\n      \n      Right contains one more item: 'app.close'\n      Use -v to get more diff",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "Production no longer passes through the legacy SemanticIntent grounder. The test checks foreground facts reach the model and the exact model-selected target is dispatched.",
+    "changed_test_explanation": "Production no longer passes through the legacy SemanticIntent grounder. The test checks foreground facts reach the model and the exact model-selected target is dispatched."
+  },
+  {
+    "nodeid": "tests/test_architecture_repair.py::test_planner_builds_plan_from_capability_schema",
+    "failure": "E   KeyError: 'capability'",
+    "classification": "OBSOLETE_TEST",
+    "reason": "The synchronous phrase planner was removed. The test now supplies a model plan to the async planner and checks that canonical schemas reached the model.",
+    "changed_test_explanation": "The synchronous phrase planner was removed. The test now supplies a model plan to the async planner and checks that canonical schemas reached the model."
+  },
+  {
+    "nodeid": "tests/test_architecture_repair.py::test_missing_capability_returns_truthful_limitation",
+    "failure": "E   AssertionError: assert ('3d print' in 'a reasoning model is required to interpret this request.' or 'hardware' in 'a reasoning model is required to interpret this request.')\n     +  where 'a reasoning model is required to interpret this request.' = <built-in method lower of str object at 0x000002478E25A480>()\n     +    where <built-in method lower of str object at 0x000002478E25A480> = 'A reasoning model is required to interpret this request.'.lower\n     +      where 'A reasoning model is required to interpret this request.' = SemanticIntent(type='CONVERSATION', goal='Can you 3D print a hinge for my desk?', required_effect='reasoning_unavailab...nt.reason', response_text='A reasoning model is required to interpret this request.', is_conversational_followup=False).response_text\n     +  and   'a reasoning model is required to interpret this request.' = <built-in method lower of str object at 0x000002478E25A480>()\n     +    where <built-in method lower of str object at 0x000002478E25A480> = 'A reasoning model is required to interpret this request.'.lower\n     +      where 'A reasoning model is required to interpret this request.' = SemanticIntent(type='CONVERSATION', goal='Can you 3D print a hinge for my desk?', required_effect='reasoning_unavailab...nt.reason', response_text='A reasoning model is required to interpret this request.', is_conversational_followup=False).response_text",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "A missing model cannot infer which physical hardware is absent. A supplied FAIL_TRUTHFULLY decision now produces unsupported with zero executor calls.",
+    "changed_test_explanation": "A missing model cannot infer which physical hardware is absent. A supplied FAIL_TRUTHFULLY decision now produces unsupported with zero executor calls."
+  },
+  {
+    "nodeid": "tests/test_architecture_repair.py::test_conversational_followup_uses_prior_context",
+    "failure": "E   assert False is True\n     +  where False = SemanticIntent(type='CONVERSATION', goal=\"So I'm working on you?\", required_effect='reasoning_unavailable', candidate_...nt.reason', response_text='A reasoning model is required to interpret this request.', is_conversational_followup=False).is_conversational_followup",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "A boolean follow-up label is not required by AgentTurn. The test checks unchanged recent history reaches the model and a conversational answer causes no action.",
+    "changed_test_explanation": "A boolean follow-up label is not required by AgentTurn. The test checks unchanged recent history reaches the model and a conversational answer causes no action."
+  },
+  {
+    "nodeid": "tests/test_architecture_repair.py::test_previous_window_concept_resolves_from_history",
+    "failure": "E   AssertionError: assert [] == ['window.focus']\n      \n      Right contains one more item: 'window.focus'\n      Use -v to get more diff",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "The model chooses the previous app from supplied world state; the legacy previous_app phrase tag is no longer required. The exact chosen target and history are checked.",
+    "changed_test_explanation": "The model chooses the previous app from supplied world state; the legacy previous_app phrase tag is no longer required. The exact chosen target and history are checked."
+  },
+  {
+    "nodeid": "tests/test_architecture_repair.py::test_process_memory_query_distinction",
+    "failure": "E   AssertionError: assert [] == ['process.list']\n      \n      Right contains one more item: 'process.list'\n      Use -v to get more diff",
+    "classification": "TEST_EXPECTATION_CHANGED_BY_NEW_ARCHITECTURE",
+    "reason": "Separate canonical model decisions replace wording-based aggregate/process routes. The test retains exact capability dispatch checks for both telemetry types.",
+    "changed_test_explanation": "Separate canonical model decisions replace wording-based aggregate/process routes. The test retains exact capability dispatch checks for both telemetry types."
+  },
+  {
+    "nodeid": "tests/test_phase8r_observability.py::test_deterministic_action_avoids_llm",
+    "failure": "E   AssertionError: assert 'error' == 'success'\n      \n      - success\n      + error",
+    "classification": "OBSOLETE_TEST",
+    "reason": "Ordinary time/date language no longer bypasses the model. The replacement checks clock facts reach model reasoning and the AGENT_TURN trace is used.",
+    "changed_test_explanation": "Ordinary time/date language no longer bypasses the model. The replacement checks clock facts reach model reasoning and the AGENT_TURN trace is used."
+  }
+]

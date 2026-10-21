@@ -9,7 +9,7 @@ import hub.main
 from hub.intent_schema import ActionPlan, ModelResult
 from hub.agent_harness import AgentHarness
 from hub.control_layer import CortexControlLayer
-from hub.llm_provider import OpenRouterLLMProvider
+from hub.direct_provider import DirectLLMProvider
 
 import tempfile
 
@@ -27,7 +27,7 @@ async def clear_state():
         await db.execute("DELETE FROM memory_items")
         await db.commit()
 @pytest.mark.asyncio
-async def test_fallback_malformed_openrouter_json():
+async def test_fallback_malformed_backup_json():
     await enroll_device("dev1", "Laptop", "admin", "hash")
     await update_device_capabilities("dev1", "windows", ["app.launch", "ui.notify"])
     await update_connection_state("dev1", "connected")
@@ -35,12 +35,13 @@ async def test_fallback_malformed_openrouter_json():
     
     hub.main.CONNECTED_DEVICES["dev1"] = AsyncMock()
     
-    # We test the OpenRouter provider directly
-    provider = OpenRouterLLMProvider(api_key="dummy", model_name="dummy")
+    # We test the Backup provider directly
+    provider = DirectLLMProvider(api_key="dummy", model_name="qwen/qwen3.8-27b")
     
     # Mock httpx to return malformed json
     class MockResponse:
         status_code = 200
+        headers = {}
         def json(self):
             return {"choices": [{"message": {"content": "User Safety: safe"}}]}
             
@@ -52,11 +53,12 @@ async def test_fallback_malformed_openrouter_json():
 
 @pytest.mark.asyncio
 async def test_fallback_schema_violation():
-    provider = OpenRouterLLMProvider(api_key="dummy", model_name="dummy")
+    provider = DirectLLMProvider(api_key="dummy", model_name="qwen/qwen3.8-27b")
     
     # Missing type field
     class MockResponse:
         status_code = 200
+        headers = {}
         def json(self):
             return {"choices": [{"message": {"content": '{"action_plan": {"intent": "open_app"}}'}}]}
             
@@ -125,49 +127,36 @@ async def test_fallback_routing_pipeline():
                 pass
             raise QuotaError("429 RESOURCE_EXHAUSTED")
 
-    class MockOpenRouter(MockLLMProvider):
+    class MockBackup(MockLLMProvider):
         def __init__(self):
             self.calls = 0
-            self.name_prop = "openrouter"
+            self.name_prop = "backup"
         @property
         def name(self) -> str:
             return self.name_prop
         async def generate_result(self, user_text, context, on_chunk=None):
             self.calls += 1
-            from hub.intent_schema import ActionPlan
-            return ModelResult(
-                type="ACTION",
-                action_plan=ActionPlan(
-                    intent="open_app",
-                    source_device="dev1",
-                    target_device_reference=None,
-                    capability="app.launch",
-                    action="open_app",
-                    arguments={"app": "calculator"},
-                    requires_confirmation=False,
-                    confidence=1.0,
-                    user_facing_summary="open calc"
-                )
-            )
+            return ModelResult(type="RESPONSE", response_text=json.dumps({
+                "decision": "RESPOND", "response_text": "Recursion solves a problem through smaller instances."}))
 
     gemini = MockGemini()
-    openrouter = MockOpenRouter()
+    backup = MockBackup()
     
     # Needs to bypass the 1s sleep in circuit breaker
     with patch("asyncio.sleep", new_callable=AsyncMock):
-        cb = CircuitBreakerProvider(gemini, openrouter)
+        cb = CircuitBreakerProvider(gemini, backup)
         harness.router = ProviderRouterAdapter(cb)
         
-        # --- SCENARIO 1: Gemini fails -> OpenRouter called ---
-        res = await harness.process_request("dev1", "email John and tell him I am running late", {"device": {"id": "dev1"}}, None)
+        # --- SCENARIO 1: Gemini fails -> Backup called ---
+        res = await harness.process_request("dev1", "Explain recursion", {"device": {"id": "dev1"}}, None)
         
         assert gemini.calls >= 1, "Gemini should be attempted first"
-        assert openrouter.calls == 1, "OpenRouter should be invoked exactly once"
+        assert backup.calls == 1, "Backup should be invoked exactly once"
         assert res.status == "success", "Original Gemini exception should not crash request"
         
-        # --- SCENARIO 2: Gemini success -> OpenRouter NOT called ---
+        # --- SCENARIO 2: Gemini success -> Backup NOT called ---
         gemini.calls = 0
-        openrouter.calls = 0
+        backup.calls = 0
         
         class SuccessGemini(MockLLMProvider):
             def __init__(self):
@@ -177,33 +166,31 @@ async def test_fallback_routing_pipeline():
                 return "gemini"
             async def generate_result(self, user_text, context, on_chunk=None):
                 self.calls += 1
-                return ModelResult(type="RESPONSE", response_text="I did it.")
+                return ModelResult(type="RESPONSE", response_text=json.dumps({"decision":"RESPOND","response_text":"Recursion uses smaller instances."}))
                 
-        harness.router = ProviderRouterAdapter(CircuitBreakerProvider(SuccessGemini(), openrouter))
-        res2 = await harness.process_request("dev1", "email John and tell him I am running late", {"device": {"id": "dev1"}}, None)
+        harness.router = ProviderRouterAdapter(CircuitBreakerProvider(SuccessGemini(), backup))
+        res2 = await harness.process_request("dev1", "Explain recursion", {"device": {"id": "dev1"}}, None)
         
         assert harness.router.provider.primary.calls == 1, "Gemini should be called"
-        assert openrouter.calls == 0, "OpenRouter should NOT be called on Gemini success"
+        assert backup.calls == 0, "Backup should NOT be called on Gemini success"
         assert res2.status == "success"
         
-        # --- SCENARIO 3: Gemini fails + OpenRouter fails -> Structured failure ---
+        # --- SCENARIO 3: Gemini fails + Backup fails -> Structured failure ---
         class FailAllGemini(MockGemini):
             pass
-        class FailAllOpenRouter(MockOpenRouter):
+        class FailAllBackup(MockBackup):
             async def generate_result(self, user_text, context, on_chunk=None):
                 self.calls += 1
-                raise Exception("OpenRouter down")
+                raise Exception("Backup down")
                 
         fail_gemini = FailAllGemini()
-        fail_openrouter = FailAllOpenRouter()
+        fail_backup = FailAllBackup()
         
-        harness.router = ProviderRouterAdapter(CircuitBreakerProvider(fail_gemini, fail_openrouter))
-        res3 = await harness.process_request("dev1", "email John and tell him I am running late", {"device": {"id": "dev1"}}, None)
+        harness.router = ProviderRouterAdapter(CircuitBreakerProvider(fail_gemini, fail_backup))
+        res3 = await harness.process_request("dev1", "Explain recursion", {"device": {"id": "dev1"}}, None)
         
         assert fail_gemini.calls >= 1
-        assert fail_openrouter.calls == 1
-        # The circuit breaker fallback catch-all returns an ACTION plan for a ui.notify
-        assert res3.status == "success"
-        # The default AgentHarness execution of ui.notify might send it as a message or command
-        # But we can check it didn't crash
+        assert fail_backup.calls == 1
+        assert res3.status == "error"
+        assert "usage limit" in res3.message.lower() and "backup service also failed" in res3.message.lower()
 

@@ -168,3 +168,56 @@ async def isolate_db():
                     break
                 except PermissionError:
                     await asyncio.sleep(0.1)
+
+
+@pytest.fixture(autouse=True)
+def forbid_external_network(monkeypatch):
+    """Offline regressions allow loopback only; accidental cloud calls fail the test."""
+    import socket
+    import ipaddress
+    attempted = []
+    original_lookup = socket.getaddrinfo
+    original_connect = socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
+
+    def check(host):
+        if host is None:
+            return
+        if isinstance(host, bytes):
+            host = host.decode("ascii")
+        if str(host).casefold() == "localhost":
+            return
+        try:
+            if ipaddress.ip_address(str(host).split("%",1)[0]).is_loopback:
+                return
+        except ValueError:
+            pass
+        attempted.append(str(host))
+        raise AssertionError("Offline regression attempted external network access")
+
+    def lookup(host, *args, **kwargs):
+        try:
+            ipaddress.ip_address(host.decode("ascii") if isinstance(host,bytes) else str(host))
+        except ValueError:
+            check(host)
+        # Numeric address parsing performs no DNS or connection; SSRF checks need it.
+        return original_lookup(host, *args, **kwargs)
+
+    def connect(sock, address):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            check(address[0])
+        return original_connect(sock, address)
+
+    def connect_ex(sock, address):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            check(address[0])
+        return original_connect_ex(sock, address)
+
+    from hub.world_state import DeviceSignalAdapter
+    monkeypatch.setattr(DeviceSignalAdapter,"inspect_network_state",staticmethod(
+        lambda: {"network_state":"offline","is_connected":False}))
+    monkeypatch.setattr(socket,"getaddrinfo",lookup)
+    monkeypatch.setattr(socket.socket,"connect",connect)
+    monkeypatch.setattr(socket.socket,"connect_ex",connect_ex)
+    yield
+    assert not attempted, "A test attempted external networking; supply an explicit provider/transport fixture"

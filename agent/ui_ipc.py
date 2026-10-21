@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import logging
 import socket
 import threading
@@ -85,7 +86,7 @@ class UIIPCClient(threading.Thread):
         self._lock = threading.Lock()
         
     def _discover_port(self) -> int | None:
-        port_file = Path.home() / ".cortex" / ".ipc_port"
+        port_file = Path(os.environ.get("CORTEX_STATE_DIR", str(Path.home() / ".cortex"))) / ".ipc_port"
         if port_file.exists():
             try:
                 content = port_file.read_text().strip()

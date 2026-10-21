@@ -92,6 +92,8 @@ class UIObservation:
     state_hash: str = ""
     source_image_reference: Optional[str] = None
     provenance: Dict[str, Any] = field(default_factory=dict)
+    pid: Optional[int] = None
+    process_name: Optional[str] = None
 
     def __post_init__(self):
         if not self.state_hash:
@@ -99,7 +101,10 @@ class UIObservation:
 
     def compute_state_hash(self) -> str:
         """Deterministic hash representing the active UI layout state."""
-        raw = f"{self.foreground_app}|{self.window_title}|{self.window_bounds}|{len(self.elements)}"
+        raw = json.dumps({"device":self.device_id,"window":self.window_id,"app":self.foreground_app,
+            "title":self.window_title,"bounds":self.window_bounds,"elements":[
+                {"role":e.role,"label":e.label,"text":e.text,"bounds":e.bounds,"enabled":e.enabled,
+                 "metadata":e.metadata} for e in self.elements]},sort_keys=True,ensure_ascii=False,default=str)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -128,6 +133,8 @@ class UIObservation:
             state_hash=data.get("state_hash") or "",
             source_image_reference=data.get("source_image_reference"),
             provenance=dict(data.get("provenance") or {}),
+            pid=data.get("pid") or (data.get("provenance", {}).get("window_identity") or {}).get("pid"),
+            process_name=data.get("process_name") or data.get("foreground_app"),
         )
 
     def find_element_by_id(self, element_id: str) -> Optional[UIElement]:

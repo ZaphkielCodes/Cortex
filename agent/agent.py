@@ -116,7 +116,7 @@ INITIAL_BACKOFF    = 2    # seconds for first retry
 AUTH_TIMEOUT       = 10   # seconds to wait for auth challenge
 
 # Path to secret file (in user home directory to separate state from source)
-LOCAL_STATE_DIR = Path.home() / ".cortex"
+LOCAL_STATE_DIR = Path(os.environ.get("CORTEX_STATE_DIR", str(Path.home() / ".cortex")))
 LOCAL_STATE_DIR.mkdir(parents=True, exist_ok=True)
 SECRET_FILE = LOCAL_STATE_DIR / "device_secret"
 
@@ -340,8 +340,40 @@ async def _session(ws_url: str, hub_base: str, device_id: str, secret: str, stop
         # Send initial online status
         await ws.send(json.dumps({"type": "status", "status": "online"}))
 
+        from .peer_worker import PeerWorker
+        peer_worker = PeerWorker()
         # Start heartbeat in background
         hb_task = asyncio.create_task(_heartbeat(ws, device_id, stop))
+
+        from .command_dispatcher import CommandDispatcher
+        if "command_dispatcher" not in active_state:
+            active_state["command_dispatcher"] = CommandDispatcher()
+        dispatcher = active_state["command_dispatcher"]
+        command_handlers = set()
+
+        async def handle_command(data):
+            command, command_id, args = data.get("command", ""), data.get("command_id", ""), data.get("args", [])
+            latency = data.get("latency_metrics") or {}
+            async def perform(pool):
+                import time
+                latency["executor_start"] = time.monotonic()
+                log.info("command_started command_id=%s capability=%s",command_id,command)
+                if command.startswith("transfer."):
+                    return await peer_worker.execute(command, args)
+                controls = {"voice.mute": voice.mute, "voice.unmute": voice.unmute, "voice.push_to_talk": voice.push_to_talk}
+                if command in controls:
+                    controls[command]()
+                    return {"status": "success", "message": "Voice control applied."}
+                return await asyncio.get_running_loop().run_in_executor(pool, execute, command, args, latency)
+            result = await dispatcher.dispatch(command_id, command, args, perform)
+            log.info("command_finished command_id=%s capability=%s status=%s",command_id,command,result.get("status"))
+            await ws.send(json.dumps({"type": "result", "command_id": command_id, "command": command,
+                "status": result["status"], "message": result["message"], "data": result.get("data"), "error": result.get("error")}))
+
+        def command_done(job):
+            command_handlers.discard(job)
+            if not job.cancelled() and job.exception():
+                log.warning("command_reply_failed reason=%s completion_unverified=true", type(job.exception()).__name__)
 
         try:
             while not stop.is_set():
@@ -377,44 +409,15 @@ async def _session(ws_url: str, hub_base: str, device_id: str, secret: str, stop
                     log.debug(f"Ignored message type: {msg_type}")
                     continue
 
-                command = data.get("command", "")
-                command_id = data.get("command_id", "")
-                args    = data.get("args", [])
-                latency_metrics = data.get("latency_metrics", {})
-                import time
-                latency_metrics["executor_start"] = time.monotonic()
-
-                log.info("Command received: %s (id=%s)", command, command_id[:8])
-
-                # ── Execute ──────────────────────────────────────────────
-                if command == "voice.mute":
-                    voice.mute()
-                    result = {"status": "success", "message": "Voice muted."}
-                elif command == "voice.unmute":
-                    voice.unmute()
-                    result = {"status": "success", "message": "Voice unmuted."}
-                elif command == "voice.push_to_talk":
-                    voice.push_to_talk()
-                    result = {"status": "success", "message": "Push to talk triggered."}
-                else:
-                    result = execute(command, args, latency_metrics)
-
-                icon = "✓" if result["status"] == "success" else "✗"
-                log.info(f"  {icon} {result['status']}: {result['message']}")
-
-                # ── Report back (include command_id) ─────────────────────
-                reply = {
-                    "type":       "result",
-                    "command_id": command_id,
-                    "command":    command,
-                    "status":     result["status"],
-                    "message":    result["message"],
-                    "data":       result.get("data"),
-                    "error":      result.get("error"),
-                }
-                await ws.send(json.dumps(reply))
+                job = asyncio.create_task(handle_command(data))
+                command_handlers.add(job)
+                job.add_done_callback(command_done)
 
         finally:
+            for job in list(command_handlers):
+                job.cancel()
+            await asyncio.gather(*command_handlers, return_exceptions=True)
+            await peer_worker.close()
             log.info(f"Session finally block: stopping VoiceController (STT active: {voice.state == 'listening'})")
             voice.stop()
             ui_server.send({"type": "agent_status", "connected": False, "authenticated": False, "voice_running": False, "device_id": device_id})
@@ -446,9 +449,9 @@ async def run_agent(hub_base: str, device_id: str, secret: str, no_ui: bool = Fa
     ui_server = UIIPCServer()
     await ui_server.start()
 
-    ipc_port_file = str(Path.home() / ".cortex" / ".ipc_port")
+    ipc_port_file = str(Path(os.environ.get("CORTEX_STATE_DIR", str(Path.home() / ".cortex"))) / ".ipc_port")
     try:
-        Path.home().joinpath(".cortex").mkdir(parents=True, exist_ok=True)
+        LOCAL_STATE_DIR.mkdir(parents=True, exist_ok=True)
         with open(ipc_port_file, "w") as f:
             f.write(str(ui_server.port))
         log.info(f"IPC port {ui_server.port} persisted to {ipc_port_file}")
@@ -501,7 +504,7 @@ async def run_agent(hub_base: str, device_id: str, secret: str, no_ui: bool = Fa
             
             # Wait for response (with timeout)
             try:
-                result = await asyncio.wait_for(fut, timeout=15.0)
+                result = await asyncio.wait_for(fut, timeout=float(os.getenv("CORTEX_HUB_REPLY_TIMEOUT", "15")))
             except asyncio.TimeoutError:
                 active_state.setdefault('timed_out_cmd_ids', set()).add(cmd_id)
                 raise
@@ -536,7 +539,7 @@ async def run_agent(hub_base: str, device_id: str, secret: str, no_ui: bool = Fa
             return res_text
         except asyncio.TimeoutError:
             log.error("Voice request timed out")
-            return "The Hub took too long to respond."
+            return "I could not confirm the hub response. Check Activity before retrying; the request may still be running."
         except Exception as e:
             log.error(f"Failed to send text to Hub: {e}")
             return "I'm sorry, I couldn't reach the Hub."
@@ -650,6 +653,8 @@ async def run_agent(hub_base: str, device_id: str, secret: str, no_ui: bool = Fa
     except KeyboardInterrupt:
         pass
     finally:
+        if active_state.get("command_dispatcher"):
+            active_state["command_dispatcher"].close()
         voice.stop()
         if ui_proc and ui_proc.poll() is None:
             log.info(f"Shutting down UI process (PID: {ui_proc.pid})")

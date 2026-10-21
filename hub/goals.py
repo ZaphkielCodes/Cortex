@@ -19,6 +19,7 @@ Responsibilities:
 import re
 import asyncio
 import uuid
+from .config import get_hub_device_id
 import logging
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
@@ -2015,15 +2016,9 @@ class GoalRunner:
 
             # Phase 9G / 9H: Grounded Target Resolution & Collection Classification
             if step.capability == "fs.list" and goal:
-                from .target_resolver import TargetResolver, match_filesystem_items
+                from .target_resolver import match_filesystem_items
                 from pathlib import Path
                 target_info = (goal.metadata or {}).get("resolved_target")
-                if not target_info and goal.original_request:
-                    dev_id = step.arguments.get("target_device") or goal.metadata.get("target_device") or "asus"
-                    res_target = TargetResolver.resolve(goal.original_request, current_device=dev_id)
-                    if res_target.action in ("delete", "move", "cleanup") and res_target.target_name:
-                        target_info = res_target.to_dict()
-
                 items = []
                 if isinstance(data, list):
                     items = data
@@ -2117,7 +2112,7 @@ class GoalRunner:
                         items=items,
                         location=loc,
                     )
-                    tgt_dev = step.arguments.get("target_device") or (goal.metadata or {}).get("target_device") or "asus"
+                    tgt_dev = step.arguments.get("target_device") or (goal.metadata or {}).get("target_device") or get_hub_device_id()
 
                     # Ambiguity guard: If unsure items exist, prompt clarification and do not delete
                     if c_res.unsure:
@@ -2223,7 +2218,7 @@ class GoalRunner:
                         }
                     else:
                         matched = match_res.matched_item
-                        tgt_dev = step.arguments.get("target_device") or goal.metadata.get("target_device") or "asus"
+                        tgt_dev = step.arguments.get("target_device") or goal.metadata.get("target_device") or get_hub_device_id()
                         grounded_dict = {
                             "target_name": target_info.get("target_name"),
                             "matched_name": matched["name"],

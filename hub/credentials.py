@@ -32,7 +32,7 @@ class CredentialStore:
             keyring.set_password(SERVICE_NAME, key, token_str)
             return True
         except Exception as e:
-            log.error(f"Failed to securely store credentials for {integration_id}: {e}")
+            log.error(f"Failed to securely store credentials for {integration_id}: {type(e).__name__}")
             return False
 
     @staticmethod
@@ -45,7 +45,7 @@ class CredentialStore:
                 return json.loads(token_str)
             return None
         except Exception as e:
-            log.error(f"Failed to retrieve secure credentials for {integration_id}: {e}")
+            log.error(f"Failed to retrieve secure credentials for {integration_id}: {type(e).__name__}")
             return None
 
     @staticmethod
@@ -58,5 +58,5 @@ class CredentialStore:
                 keyring.delete_password(SERVICE_NAME, key)
             return True
         except Exception as e:
-            log.error(f"Failed to delete secure credentials for {integration_id}: {e}")
+            log.error(f"Failed to delete secure credentials for {integration_id}: {type(e).__name__}")
             return False

@@ -14,6 +14,8 @@ Phase 8D additions:
 """
 
 import os
+import asyncio
+from .config import get_hub_device_id
 import json
 import logging
 import ctypes
@@ -114,19 +116,21 @@ class DeviceSignalAdapter(BaseSignalAdapter):
         return "device_agent"
 
     @staticmethod
-    def inspect_system_telemetry(device_id: str = "asus") -> Dict[str, Any]:
+    def inspect_system_telemetry(device_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Inspect live system telemetry directly via safe local OS APIs (psutil, platform, winreg).
         Returns deterministic hardware and resource utilization metrics without subprocess shelling.
         """
+        device_id = device_id or get_hub_device_id()
         import platform
         import psutil
 
         # 1. CPU & RAM
         try:
-            cpu_pct = float(psutil.cpu_percent(interval=None))
+            # A bounded sample is valid on the first call and on a new worker thread.
+            cpu_pct = float(psutil.cpu_percent(interval=0.1))
         except Exception:
-            cpu_pct = 0.0
+            cpu_pct = None
 
         try:
             vmem = psutil.virtual_memory()
@@ -216,8 +220,9 @@ class DeviceSignalAdapter(BaseSignalAdapter):
         }
 
     @staticmethod
-    def create_telemetry_signals(device_id: str = "asus", telemetry: Optional[Dict[str, Any]] = None) -> List[Signal]:
+    def create_telemetry_signals(device_id: Optional[str] = None, telemetry: Optional[Dict[str, Any]] = None) -> List[Signal]:
         """Creates atomic Phase 8D telemetry signals for the device."""
+        device_id = device_id or get_hub_device_id()
         telem = telemetry if telemetry is not None else DeviceSignalAdapter.inspect_system_telemetry(device_id)
         now = datetime.now(timezone.utc).isoformat()
         sigs: List[Signal] = []
@@ -1407,9 +1412,8 @@ class WorldStateManager:
                 if k.startswith("device.foreground:"):
                     fg_payload = s.payload
                     break
-        if not fg_payload:
-            # Try native Windows foreground window inspection
-            native_win = ActivitySignalAdapter.inspect_windows_foreground()
+        if not fg_payload and dev_id == get_hub_device_id():
+            native_win = await asyncio.to_thread(ActivitySignalAdapter.inspect_windows_foreground)
             if native_win:
                 fg_payload = native_win
 
@@ -1425,13 +1429,8 @@ class WorldStateManager:
             net_sig = fresh_signals.get(f"device.network:{dev_id}")
             if net_sig:
                 net_payload = net_sig.payload
-        if not net_payload:
-            for k, s in fresh_signals.items():
-                if k.startswith("device.network:"):
-                    net_payload = s.payload
-                    break
-        if not net_payload:
-            native_net = DeviceSignalAdapter.inspect_network_state()
+        if not net_payload and dev_id == get_hub_device_id():
+            native_net = await asyncio.to_thread(DeviceSignalAdapter.inspect_network_state)
             if native_net.get("is_connected"):
                 net_payload = native_net
         network_context = net_payload or {"network_state": "unknown", "is_connected": False}
@@ -1445,10 +1444,10 @@ class WorldStateManager:
                     "battery_level": s.payload.get("battery_level"),
                     "is_charging": s.payload.get("is_charging")
                 }
-        if dev_id and dev_id not in battery_states:
+        if dev_id == get_hub_device_id() and dev_id not in battery_states:
             try:
                 import psutil
-                ps_bat = psutil.sensors_battery()
+                ps_bat = await asyncio.to_thread(psutil.sensors_battery)
                 if ps_bat:
                     battery_states[dev_id] = {
                         "battery_level": int(ps_bat.percent),
@@ -1498,16 +1497,16 @@ class WorldStateManager:
             user_presence = "active"
 
         # 10. System Telemetry (Phase 8D)
-        target_telem_dev = dev_id or "asus"
+        target_telem_dev = dev_id or get_hub_device_id()
         system_telemetry: Dict[str, Any] = {}
         for k, s in fresh_signals.items():
-            if k.startswith("device.") and (f":{target_telem_dev}" in k or ":asus" in k):
+            if k.startswith("device.") and k.endswith(f":{target_telem_dev}"):
                 prop = k.split(":")[0].replace("device.", "")
                 system_telemetry[prop] = s.payload.get("value", s.payload.get(prop))
 
-        if (target_telem_dev in ("asus", "this_device") or not system_telemetry) and os.name == "nt":
+        if target_telem_dev == get_hub_device_id() and os.name == "nt":
             try:
-                live_telem = DeviceSignalAdapter.inspect_system_telemetry(target_telem_dev)
+                live_telem = await asyncio.to_thread(DeviceSignalAdapter.inspect_system_telemetry, target_telem_dev)
                 for tk, tv in live_telem.items():
                     if tk not in system_telemetry:
                         system_telemetry[tk] = tv
@@ -1712,10 +1711,10 @@ class WorldStateManager:
         # Battery
         bat_sig = self._signals.get(f"device.battery:{device_id}")
         battery_info = bat_sig.payload if (bat_sig and bat_sig.is_fresh(now)) else None
-        if not battery_info and (self._active_device_id == device_id or device_id in ("asus", "this_device")):
+        if not battery_info and device_id == get_hub_device_id():
             try:
                 import psutil
-                ps_bat = psutil.sensors_battery()
+                ps_bat = await asyncio.to_thread(psutil.sensors_battery)
                 if ps_bat:
                     battery_info = {
                         "device_id": device_id,
@@ -1728,19 +1727,19 @@ class WorldStateManager:
         # Network
         net_sig = self._signals.get(f"device.network:{device_id}")
         network_info = net_sig.payload if (net_sig and net_sig.is_fresh(now)) else None
-        if not network_info and (self._active_device_id == device_id or device_id in ("asus", "this_device")):
-            network_info = DeviceSignalAdapter.inspect_network_state()
+        if not network_info and device_id == get_hub_device_id():
+            network_info = await asyncio.to_thread(DeviceSignalAdapter.inspect_network_state)
 
         # Foreground
         fg_sig = self._signals.get(f"device.foreground:{device_id}")
         fg_info = fg_sig.payload if (fg_sig and fg_sig.is_fresh(now)) else None
-        if not fg_info and (self._active_device_id == device_id or device_id in ("asus", "this_device")):
-            fg_info = ActivitySignalAdapter.inspect_windows_foreground()
+        if not fg_info and device_id == get_hub_device_id():
+            fg_info = await asyncio.to_thread(ActivitySignalAdapter.inspect_windows_foreground)
 
         # Telemetry
         telem_info = None
-        if self._active_device_id == device_id or device_id in ("asus", "this_device"):
-            telem_info = DeviceSignalAdapter.inspect_system_telemetry(device_id)
+        if self._active_device_id == device_id or device_id == get_hub_device_id():
+            telem_info = await asyncio.to_thread(DeviceSignalAdapter.inspect_system_telemetry, device_id)
 
         return {
             "device_id": device_id,

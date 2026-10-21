@@ -139,16 +139,26 @@ async def test_memory_and_schedule_controls_persist_to_isolated_database():
 @pytest.mark.asyncio
 async def test_message_returns_background_id_and_updates_source_session():
     from hub import api_control
-    result = SimpleNamespace(status="in_progress", message="Working", data={"task_id": "turn"}, action_plan=None)
-    harness = SimpleNamespace(process_request=AsyncMock(return_value=result))
+    from hub.request_lifecycle import RequestLifecycle
+    from hub.intent_schema import ConversationalResponse
+    release = asyncio.Event()
+    async def finish(**kwargs):
+        await release.wait()
+        return ConversationalResponse(status="success", message="Finished")
+    harness = SimpleNamespace(process_request=AsyncMock(side_effect=finish))
     with patch("hub.main._agent_harness", harness, create=True), \
          patch("hub.context.ContextManager.get_active_context", AsyncMock(return_value={})), \
+         patch.object(RequestLifecycle, "ACK_SECONDS", .01), \
          patch("hub.session_context.SessionContextManager.update_session", AsyncMock()) as session:
         response = await api_control.send_message_endpoint(api_control.MessageRequest(
             text="test", device_id="source", target_device="target"))
-        assert response["task_id"] == "turn"
+        assert response["status"] == "in_progress" and response["task_id"].startswith("request_")
         assert harness.process_request.call_args.kwargs["source_device_id"] == "source"
         assert harness.process_request.call_args.kwargs["context"]["requested_device"] == "target"
+        release.set()
+        await asyncio.gather(*(record.task for record in list(RequestLifecycle._jobs.values())))
+        await asyncio.sleep(0)
+        await asyncio.gather(*list(RequestLifecycle._deliveries))
         assert session.call_args.args[0] == "source"
 
 

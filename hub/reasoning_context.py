@@ -1,5 +1,6 @@
 """Bounded, source-labelled facts for model reasoning, subject to existing privacy policy."""
 import json
+from .context_compression import context_budget
 
 
 _SECRET_KEYS = {"password", "secret", "token", "apikey", "authorization", "cookie",
@@ -29,7 +30,7 @@ def build_reasoning_context(context, permits):
     """
     result = {"snapshot_only": True}
     omitted = []
-    remaining = 12000
+    remaining = context_budget("CORTEX_REASONING_CONTEXT_BYTES", 4000)
 
     def add(name, value, capability, privacy_class="INTERNAL"):
         nonlocal remaining
@@ -56,9 +57,21 @@ def build_reasoning_context(context, permits):
     references = session.get("references") or context.get("references") or {}
     reference_keys = ("last_app", "last_closed_app", "last_action", "last_intent", "last_capability",
         "last_action_target", "last_target", "last_confirmed_app", "foreground_app", "current_app",
-        "last_grounded_path", "grounded_target", "pending_action")
+        "last_grounded_path", "grounded_target", "pending_action", "last_file",
+        "last_screenshot_ref", "last_screenshot_device")
     add("session_references", {k: references[k] for k in reference_keys if k in references},
         "fs.read", "SENSITIVE")
+
+    recent_receipts = [{"task_id": turn.get("task_id"), "response_status": turn.get("response_status"),
+        "execution_receipts": turn["execution_receipts"]} for turn in session.get("turns", [])[-3:]
+        if isinstance(turn, dict) and turn.get("execution_receipts")]
+    add("recent_execution", recent_receipts, "device.info", "INTERNAL")
+
+    receipt=references.get("last_window_receipt") or {}
+    if isinstance(receipt,dict):
+        add("previous_window",{key:receipt[key] for key in
+            ("window_id","pid","app_name","foreground_app","process_name","capability","executor_device","observed_at","snapshot_only")
+            if key in receipt},"device.info","INTERNAL")
 
     memories = []
     for row in (context.get("memory") or [])[:15]:
@@ -73,7 +86,7 @@ def build_reasoning_context(context, permits):
     add("memory", memories[:8], "notes.list", "PERSONAL")
 
     add("world_snapshot", {k: world[k] for k in ("active_device_id", "active_device_name",
-        "foreground_app", "previous_app", "previous_window_title", "location", "calendar_connected",
+        "foreground_app", "previous_app", "previous_window_title", "screen_summary", "location", "calendar_connected",
         "calendar_current_event", "calendar_next_event", "calendar_time_until_next", "calendar_status")
         if k in world}, "screen.analyze", "SENSITIVE")
     task = context.get("task") or {}

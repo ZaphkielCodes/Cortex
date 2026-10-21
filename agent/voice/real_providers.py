@@ -38,6 +38,7 @@ class LocalWakeWordProvider(WakeWordProvider):
         self._q = queue.Queue()
         self._thread = None
         self._on_wake = None
+        self._handoff_audio = b""
         
     def _callback(self, indata, frames, time, status):
         if status:
@@ -56,6 +57,8 @@ class LocalWakeWordProvider(WakeWordProvider):
         # Grammar restriction vastly improves recall, reduces false positives, and lowers CPU usage
         grammar = json.dumps([self.wake_word, "[unk]"])
         rec = KaldiRecognizer(model, 16000, grammar)
+        from collections import deque
+        recent_audio = deque(maxlen=12)  # Three seconds, in memory only.
         
         try:
             # Use a smaller blocksize (4000) for faster reaction (0.25s) instead of 8000
@@ -65,37 +68,57 @@ class LocalWakeWordProvider(WakeWordProvider):
                     if not self._running:
                         break
                         
+                    recent_audio.append(data)
                     if rec.AcceptWaveform(data):
-                        res = json.loads(rec.Result())
-                        text = res.get("text", "")
-                        if self.wake_word in text:
-                            log.info(f"[Latency] Wake-word detected: {time.monotonic() - t_start:.3f}s since listening began")
-                            log.info(f"[WakeWord] Detected: '{text}'")
-                            if self._on_wake:
-                                self._on_wake()
-                                with self._q.mutex:
-                                    self._q.queue.clear()
+                        text = json.loads(rec.Result()).get("text", "")
+                    else:
+                        text = json.loads(rec.PartialResult()).get("partial", "")
+                    if self.wake_word in text:
+                        # Detect during speech, retaining any command onset already captured.
+                        self._handoff_audio = b"".join(recent_audio)
+                        self._running = False
+                        log.info(f"[Latency] Wake-word detected: {time.monotonic() - t_start:.3f}s since listening began")
+                        log.info(f"[WakeWord] Detected: '{text}'")
+                        if self._on_wake:
+                            self._on_wake()
+                        break
         except Exception as e:
             log.error(f"[WakeWord] Error: {e}")
             
     def start(self, on_wake) -> None:
         if self._running: return
         self._on_wake = on_wake
+        self._handoff_audio = b""
+        with self._q.mutex:
+            self._q.queue.clear()
         self._running = True
         log.info(f"[WakeWord] Started listening for '{self.wake_word}'...")
         self._thread = threading.Thread(target=self._listen_loop, daemon=True)
         self._thread.start()
         
+    def take_audio(self):
+        audio, self._handoff_audio = self._handoff_audio, b""
+        return audio
+
+    def wait_stopped(self):
+        if self._thread and self._thread is not threading.current_thread():
+            self._thread.join(timeout=1.0)
+        return not self._thread or not self._thread.is_alive()
+
     def stop(self) -> None:
         self._running = False
         self._q.put(b"") # unblock
 
 class VoskSTTProvider(STTProvider):
     def __init__(self):
+        self._initial_audio = b""
         self._listening = False
         self._q = None
         self._loop = None
         
+    def set_initial_audio(self, audio):
+        self._initial_audio = bytes(audio)[-96000:]
+
     def _callback(self, indata, frames, time, status):
         if self._q and self._loop:
             self._loop.call_soon_threadsafe(self._q.put_nowait, bytes(indata))
@@ -115,6 +138,9 @@ class VoskSTTProvider(STTProvider):
         self._listening = True
         self._loop = asyncio.get_running_loop()
         self._q = asyncio.Queue()
+        initial, self._initial_audio = self._initial_audio, b""
+        for offset in range(0, len(initial), 8000):
+            self._q.put_nowait(initial[offset:offset+8000])
         
         import psutil
         ram_mb = psutil.Process().memory_info().rss / (1024 * 1024)

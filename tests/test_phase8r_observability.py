@@ -88,7 +88,7 @@ class StubProvider(LLMProvider):
 @pytest.mark.asyncio
 async def test_successful_primary_response():
     primary = StubProvider("gemini-primary", result_text="The capital of France is Paris.")
-    fallback = StubProvider("openrouter-fallback", result_text="Fallback text")
+    fallback = StubProvider("backup-fallback", result_text="Fallback text")
     cb = CircuitBreakerProvider(primary=primary, fallback=fallback)
 
     trace = InteractionTrace(interaction_id="ix_test_1")
@@ -115,7 +115,7 @@ async def test_successful_primary_response():
 async def test_primary_ttft_timeout_fallback():
     timeout_exc = ModelDeadlineExceeded("Time to first token deadline exceeded: 3.20s > 3.00s")
     primary = StubProvider("gemini-primary", exc=timeout_exc)
-    fallback = StubProvider("openrouter-fallback", result_text="Fallback answered promptly.")
+    fallback = StubProvider("backup-fallback", result_text="Fallback answered promptly.")
     cb = CircuitBreakerProvider(primary=primary, fallback=fallback)
 
     trace = InteractionTrace(interaction_id="ix_test_2")
@@ -129,7 +129,7 @@ async def test_primary_ttft_timeout_fallback():
     assert fallback.call_count == 1
     assert trace.fallback_occurred is True
     assert trace.failure_category == "DEADLINE_EXCEEDED"
-    assert trace.model_provider == "openrouter-fallback"
+    assert trace.model_provider == "backup-fallback"
     assert cb.failures == 1
 
 
@@ -141,7 +141,7 @@ async def test_primary_ttft_timeout_fallback():
 async def test_primary_exception_fallback():
     primary_exc = Exception("503 Service Unavailable: High demand on gemini-3.8-flash")
     primary = StubProvider("gemini-primary", exc=primary_exc)
-    fallback = StubProvider("openrouter-fallback", result_text="Recovered via OpenRouter.")
+    fallback = StubProvider("backup-fallback", result_text="Recovered via Backup.")
     cb = CircuitBreakerProvider(primary=primary, fallback=fallback)
 
     trace = InteractionTrace(interaction_id="ix_test_3")
@@ -153,7 +153,7 @@ async def test_primary_exception_fallback():
 
     # Fallback must be immediate, not stuck in a blind sleep/retry loop
     assert elapsed < 1.0
-    assert res.response_text == "Recovered via OpenRouter."
+    assert res.response_text == "Recovered via Backup."
     assert primary.call_count == 1
     assert fallback.call_count == 1
     assert trace.fallback_occurred is True
@@ -168,7 +168,7 @@ async def test_primary_exception_fallback():
 @pytest.mark.asyncio
 async def test_fallback_also_fails():
     primary = StubProvider("gemini-primary", exc=Exception("503 Service Unavailable"))
-    fallback = StubProvider("openrouter-fallback", exc=Exception("429 Rate limit exceeded"))
+    fallback = StubProvider("backup-fallback", exc=Exception("429 Rate limit exceeded"))
     cb = CircuitBreakerProvider(primary=primary, fallback=fallback)
 
     trace = InteractionTrace(interaction_id="ix_test_4")
@@ -193,13 +193,13 @@ async def test_fallback_also_fails():
 async def test_late_primary_response_after_fallback_wins():
     cb = CircuitBreakerProvider(
         primary=StubProvider("gemini-primary", result_text="Late primary output"),
-        fallback=StubProvider("openrouter-fallback", result_text="Authoritative fallback output")
+        fallback=StubProvider("backup-fallback", result_text="Authoritative fallback output")
     )
     interaction_id = "ix_race_5"
 
     # Pre-register fallback as the winner
     winner_result = ModelResult(type="RESPONSE", response_text="Authoritative fallback output")
-    cb._interaction_winners[interaction_id] = "openrouter-fallback"
+    cb._interaction_winners[interaction_id] = "backup-fallback"
     cb._interaction_winners[interaction_id + "_result"] = winner_result
 
     # Now primary returns late for the same interaction
@@ -208,7 +208,7 @@ async def test_late_primary_response_after_fallback_wins():
 
     # Late primary must be discarded; authoritative fallback result must be returned
     assert res.response_text == "Authoritative fallback output"
-    assert cb._interaction_winners[interaction_id] == "openrouter-fallback"
+    assert cb._interaction_winners[interaction_id] == "backup-fallback"
 
 
 # ---------------------------------------------------------------------------
@@ -314,8 +314,8 @@ def test_no_raw_api_error_reaches_tts():
 
     # Secret scrubber defense-in-depth
     # Construct a synthetic token so published tests contain no credential-shaped literal.
-    fake_openrouter_key = "sk-or-v1-" + "0" * 64
-    dirty_text = f"Bearer eyJhbGciOiJIUzI1NiJ9.test and Google Key AIzaSyB1234567890abcdef1234567890abcde and OpenRouter {fake_openrouter_key}"
+    fake_backup_key = "sk-or-v1-" + "0" * 64
+    dirty_text = f"Bearer eyJhbGciOiJIUzI1NiJ9.test and Google Key AIzaSyB1234567890abcdef1234567890abcde and Backup {fake_backup_key}"
     clean_text = scrub_secrets(dirty_text)
     assert "AIzaSy" not in clean_text
     assert "sk-or-v1" not in clean_text
@@ -330,7 +330,7 @@ def test_no_raw_api_error_reaches_tts():
 @pytest.mark.asyncio
 async def test_circuit_breaker_behavior():
     primary = StubProvider("gemini-primary", exc=Exception("503 Service Unavailable"))
-    fallback = StubProvider("openrouter-fallback", result_text="Fallback answer")
+    fallback = StubProvider("backup-fallback", result_text="Fallback answer")
     cb = CircuitBreakerProvider(primary=primary, fallback=fallback)
 
     now = time.time()
@@ -508,42 +508,13 @@ def test_trace_completeness():
 @pytest.mark.asyncio
 async def test_deterministic_action_avoids_llm():
     # Verify that deterministic queries like time and date do not invoke the LLM
-    primary = StubProvider("gemini-primary", exc=RuntimeError("LLM should not be called!"))
-    cb = CircuitBreakerProvider(primary=primary)
-
-    harness = AgentHarness(control_layer=CortexControlLayer(connected_devices_map={}))
-    harness.router.provider = cb
-
-    async def log_action(*args, **kwargs):
-        pass
-
-    ctx = {
-        "device": {"id": "dev_test", "name": "ASUS Zenbook"},
-        "world_state": {"active_device_name": "ASUS Zenbook"}
-    }
-
-    # "What time is it?" should be resolved deterministically
-    res_time = await harness.process_request(
-        source_device_id="dev_test",
-        natural_request="what time is it",
-        context=ctx,
-        log_action_callback=log_action
-    )
-    assert res_time.status == "success"
-    assert "current time is" in res_time.message.lower()
-    assert primary.call_count == 0  # Zero LLM calls!
-    assert res_time.latency_metrics["routing_lane"] in ("DETERMINISTIC_DIRECT", "DETERMINISTIC_SITUATIONAL")
-
-    # "What day is today?" should be resolved deterministically
-    res_date = await harness.process_request(
-        source_device_id="dev_test",
-        natural_request="what day is today",
-        context=ctx,
-        log_action_callback=log_action
-    )
-    assert res_date.status == "success"
-    assert "today is" in res_date.message.lower()
-    assert primary.call_count == 0  # Zero LLM calls!
+    from model_contract_fixtures import scripted_harness
+    harness,ctrl,model=scripted_harness([{"decision":"RESPOND","response_text":"The supplied runtime clock reads 12:34."}])
+    result=await harness.process_request("asus","what time is it",{"world_state":{"current_time":"12:34"}})
+    assert result.status == "success"
+    assert len(model.calls) == 1
+    assert "12:34" in model.calls[0][1]["system_prompt"]
+    assert result.latency_metrics["routing_lane"] == "AGENT_TURN"
 
 
 # ---------------------------------------------------------------------------

@@ -79,7 +79,7 @@ class ComputerUseTask:
     """Durable checkpointed state for a multi-step computer-use interaction."""
     task_id: str
     goal: str
-    executor_device: str = "asus"
+    executor_device: str = ""
     current_step_index: int = 0
     steps: List[ComputerUseStep] = field(default_factory=list)
     state: str = ExecutionState.ACTIVE
@@ -126,7 +126,7 @@ class ComputerUseTaskController:
     def create_task(
         self,
         goal: str,
-        executor_device: str = "asus",
+        executor_device: str = "",
         initial_steps: Optional[List[Dict[str, Any]]] = None,
         success_condition: Optional[str] = None,
         execution_mode: str = "computer_use",
@@ -160,6 +160,35 @@ class ComputerUseTaskController:
         self._active_tasks[tid] = task
         return task
 
+    def agent_runtime(self, task_id, goal, source, parent=None, snapshot=None):
+        from .compound_ui import CompoundRuntime, CompoundState
+        if snapshot:
+            state = CompoundState(**snapshot)
+            if (state.task_id, state.source_device, state.parent_task_id) != (task_id, source, parent):
+                raise ValueError("Recovered compound task identity does not match its owner")
+            state.current_stage = "OBSERVING"
+            state.fresh_required = True
+            state.previous_observation_id = state.current_observation_id
+            state.current_observation_id = None
+            for action in state.action_history:
+                action["recovered"] = True
+        else:
+            state = CompoundState(task_id=task_id, goal=goal, source_device=source, parent_task_id=parent)
+        return CompoundRuntime(state)
+
+    def ground_agent_action(self, arguments, observation, capability=None):
+        snapshot = UIObservation.from_dict(observation)
+        if capability == "ui.drag":
+            source = UIElementGrounder.ground_atomic({"target":arguments.get("from_target"),
+                **({"x":arguments["from_x"],"y":arguments["from_y"]} if "from_x" in arguments and "from_y" in arguments else {})},snapshot)
+            destination = UIElementGrounder.ground_atomic({"target":arguments.get("to_target"),
+                **({"x":arguments["to_x"],"y":arguments["to_y"]} if "to_x" in arguments and "to_y" in arguments else {})},snapshot)
+            if not source.success or not destination.success:
+                return GroundingResult(success=False,explanation="Drag endpoints need unique observed controls")
+            source.destination = destination.element
+            return source
+        return UIElementGrounder.ground_atomic(arguments, snapshot)
+
     def get_task(self, task_id: str) -> Optional[ComputerUseTask]:
         return self._active_tasks.get(task_id)
 
@@ -173,38 +202,11 @@ class ComputerUseTaskController:
         session_context: Optional[Dict[str, Any]],
         observation: UIObservation,
     ) -> Tuple[Any, Optional[str]]:
+        """Targets must already be selected by model reasoning against observations.
+
+        Retained for structured legacy callers; natural language never selects a
+        hotkey, resumes a task, or reuses a stale element identifier here.
         """
-        Context continuity resolver for deictic expressions:
-        'click that', 'open it', 'go back', 'the second one', 'the newest PDF', 'continue'.
-        """
-        text = (raw_target or "").strip().lower()
-
-        # 1. 'that' / 'it' / 'this' -> reference last grounded element
-        if text in ("that", "it", "this", "click that", "open it"):
-            if task and task.last_grounded_element:
-                el_id = task.last_grounded_element.get("element_id")
-                el_lbl = task.last_grounded_element.get("label")
-                if el_id:
-                    return el_id, f"Resolved '{text}' to last grounded element '{el_lbl}' ({el_id})."
-
-            if session_context:
-                refs = session_context.get("references", {})
-                last_ui = refs.get("last_ui_element")
-                if last_ui:
-                    return last_ui, f"Resolved '{text}' to session reference '{last_ui}'."
-
-        # 2. 'the second one' / 'second item' / '2nd result'
-        if any(w in text for w in ("second", "first", "third", "2nd", "1st", "3rd", "last")):
-            return text, f"Resolved ordinal reference '{text}' against current observation."
-
-        # 3. 'go back'
-        if text in ("go back", "back"):
-            return "ui.hotkey", "alt+left"
-
-        # 4. 'continue' / 'continue where you left off'
-        if "continue" in text:
-            return "continue", "Resuming task from checkpoint."
-
         return raw_target, None
 
     def evaluate_action_risk(
@@ -241,15 +243,9 @@ class ComputerUseTaskController:
         """
         Execute one bounded Observe-Ground-Act-Verify cycle within a task.
         """
-        executor_device = task.executor_device or "asus"
-
-        # 1. Device Affinity Check
-        if executor_device == "asus":
-            # ASUS physical screen must be active
-            pass
-        elif executor_device != "asus":
-            # For cross-device tasks, ensure executor is available
-            pass
+        executor_device = task.executor_device
+        if not executor_device:
+            return {"status": "failure", "message": "A verified executor is required."}
 
         # 2. Step 1: Observe Screen
         emit_activity(
@@ -532,7 +528,7 @@ class ComputerUseTaskController:
         task_id: str,
         goal: str,
         next_action: Dict[str, Any],
-        device_id: str = "asus",
+        device_id: str = "",
         approved: bool = False,
     ) -> Dict[str, Any]:
         """Synchronous single-step execution helper for task progression."""

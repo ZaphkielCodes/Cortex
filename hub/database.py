@@ -925,11 +925,8 @@ async def _migrate_schema_updates() -> None:
             except Exception:
                 pass
 
-        # Migrate existing ASUS record to primary_admin and backfill trust levels
+        # Backfill trust from existing roles; identifiers never grant privileges.
         try:
-            await db.execute(
-                "UPDATE devices SET role = 'primary_admin', trust_level = 'admin', device_type = 'laptop' WHERE device_id = 'asus'"
-            )
             await db.execute(
                 "UPDATE devices SET trust_level = 'admin' WHERE role = 'admin' AND (trust_level IS NULL OR trust_level = 'standard')"
             )

@@ -432,11 +432,10 @@ class TransportProvider(ABC):
         pass
 
 
-class LANTransportProvider(TransportProvider):
+class InProcessTransportProvider(TransportProvider):
     """
-    Preferred local-network bulk transport provider.
-    Transfers encrypted, chunked data peer-to-peer over local LAN endpoints.
-    Enforces atomic write (.cortex_part) and final checksum integrity.
+    Explicit component-test adapter using local files. Not a network transport.
+    Production must use authenticated peer workers through hub.transfer_file.
     """
     transport_name: str = "lan"
 
@@ -576,6 +575,27 @@ class LANTransportProvider(TransportProvider):
         return True
 
 
+class LANTransportProvider(InProcessTransportProvider):
+    """Compatibility entry point. Never impersonate remote devices with hub file I/O."""
+    def is_available(self):
+        return False
+
+    def can_reach(self, source_handle, dest_handle):
+        return False
+
+    async def negotiate(self, session, ticket):
+        raise ConnectionError("Use hub.transfer_file with authenticated peer workers")
+
+    async def send_chunk(self, *args, **kwargs):
+        raise ConnectionError("A real peer worker is required")
+
+    async def receive_chunk(self, *args, **kwargs):
+        raise ConnectionError("A real peer worker is required")
+
+    async def verify(self, session):
+        return False
+
+
 class WiFiDirectTransportProvider(TransportProvider):
     """
     Pluggable Wi-Fi Direct peer-to-peer transport provider.
@@ -587,10 +607,12 @@ class WiFiDirectTransportProvider(TransportProvider):
         self._hardware_supported = hardware_supported
 
     def is_available(self) -> bool:
-        return self._hardware_supported
+        # The legacy hub provider has no radio/data-plane binding. Actual device
+        # Wi-Fi Direct uses agent.nearby plus the same TLS peer worker protocol.
+        return False
 
     def can_reach(self, source_handle: DeviceHandle, dest_handle: DeviceHandle) -> bool:
-        if not self._hardware_supported:
+        if not self.is_available():
             return False
         return (
             source_handle.transports.get("wifi_direct", False)
@@ -626,18 +648,14 @@ class BLENegotiationProvider(TransportProvider):
     transport_name: str = "ble"
 
     def is_available(self) -> bool:
-        return True
+        return False
 
     def can_reach(self, source_handle: DeviceHandle, dest_handle: DeviceHandle) -> bool:
         # BLE does not carry file payloads
         return False
 
     async def negotiate(self, session: TransferSession, ticket: TransferTicket) -> Dict[str, Any]:
-        return {
-            "status": "metadata_exchanged",
-            "transport": "ble",
-            "note": "BLE negotiated auth metadata; payload must move over LAN or Wi-Fi Direct.",
-        }
+        raise ConnectionError("Use the device's real nearby discovery adapter; BLE is not a file transport")
 
     async def send_chunk(self, session: TransferSession, chunk_index: int, offset: int, chunk_data: bytes, chunk_hash: str) -> bool:
         raise RuntimeError("BLE transport is reserved for proximity authentication and strictly forbids bulk payloads.")
@@ -668,10 +686,10 @@ class CloudRelayTransportProvider(TransportProvider):
         self._relay_available = relay_available
 
     def is_available(self) -> bool:
-        return self._relay_available
+        return False
 
     def can_reach(self, source_handle: DeviceHandle, dest_handle: DeviceHandle) -> bool:
-        if not self._relay_available:
+        if not self.is_available():
             return False
         return (
             source_handle.transports.get("cloud_relay", False)
@@ -687,19 +705,15 @@ class CloudRelayTransportProvider(TransportProvider):
         if session.privacy_class == PrivacyClass.SENSITIVE and not policy.sensitive_data_cloud_allowed:
             raise PermissionError("Cloud relay transport forbidden for SENSITIVE data under current privacy policy.")
 
-        return {
-            "status": "ready",
-            "transport": "cloud_relay",
-            "encryption": "tls_1_3",
-        }
+        raise ConnectionError("No cloud byte relay has been deployed")
 
     async def send_chunk(self, session: TransferSession, chunk_index: int, offset: int, chunk_data: bytes, chunk_hash: str) -> bool:
         if session.privacy_class == PrivacyClass.HIGHLY_SENSITIVE:
             raise PermissionError("Cloud relay rejected: data is HIGHLY_SENSITIVE.")
-        return True
+        raise ConnectionError("No cloud byte relay has been deployed")
 
     async def receive_chunk(self, session: TransferSession, chunk_index: int, offset: int, chunk_data: bytes, chunk_hash: str) -> bool:
-        return True
+        raise ConnectionError("No cloud byte relay has been deployed")
 
     async def resume(self, session: TransferSession) -> int:
         return session.transferred_bytes
@@ -708,7 +722,7 @@ class CloudRelayTransportProvider(TransportProvider):
         return True
 
     async def verify(self, session: TransferSession) -> bool:
-        return True
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -726,7 +740,7 @@ class TransportSelector:
             "lan": LANTransportProvider(),
             "wifi_direct": WiFiDirectTransportProvider(hardware_supported=False),
             "ble": BLENegotiationProvider(),
-            "cloud_relay": CloudRelayTransportProvider(relay_available=True),
+            "cloud_relay": CloudRelayTransportProvider(relay_available=False),
         }
 
     def register_provider(self, name: str, provider: TransportProvider) -> None:
@@ -1010,8 +1024,7 @@ class FileTransferManager:
             total_bytes = mock_total_bytes
             src_checksum = mock_source_checksum or hashlib.sha256(b"mock_file_content").hexdigest()
         else:
-            total_bytes = 1024
-            src_checksum = hashlib.sha256(b"mock_file_content").hexdigest()
+            raise FileNotFoundError("The source file is unavailable; synthetic transfer data is forbidden")
 
         # 4. Check destination collision
         p_dst = Path(destination_path)
@@ -1139,14 +1152,8 @@ class FileTransferManager:
         # Determine payload stream
         p_src = Path(session.source_path)
         payload = data_payload
-        if payload is None and p_src.exists() and p_src.is_file():
-            payload = p_src.read_bytes()
-        elif payload is None:
-            # Generate deterministic synthetic payload for unit test if real file not on disk
-            payload = b"CORTEX_TEST_PAYLOAD_" * (max(1, session.total_bytes // 20))
-            payload = payload[:session.total_bytes]
-            session.total_bytes = len(payload)
-            session.source_checksum = hashlib.sha256(payload).hexdigest()
+        if payload is None and not p_src.is_file():
+            raise FileNotFoundError("The source file is unavailable; synthetic transfer data is forbidden")
 
         # Chunked send loop - verify actual on-disk resume boundary if resumable
         if provider and session.resumable:
@@ -1162,7 +1169,14 @@ class FileTransferManager:
                 return session
 
             end = min(offset + session.chunk_size, session.total_bytes)
-            chunk_data = payload[offset:end]
+            if payload is not None:
+                chunk_data = payload[offset:end]
+            else:
+                with p_src.open("rb") as stream:
+                    stream.seek(offset)
+                    chunk_data = stream.read(end - offset)
+            if len(chunk_data) != end - offset:
+                raise IOError("Source changed during transfer")
             chunk_hash = hashlib.sha256(chunk_data).hexdigest()
 
             try:

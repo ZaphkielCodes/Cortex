@@ -36,6 +36,47 @@ class UIElementGrounder:
     at execution time against an active UIObservation.
     """
 
+    @classmethod
+    def ground_atomic(cls, arguments, observation):
+        """Primary path: exact observed identity or an unambiguous selector only.
+
+        Legacy natural-language/fuzzy/spatial helpers remain compatibility code;
+        they cannot choose the target of an AgentTurn input action.
+        """
+        if not observation:
+            return GroundingResult(success=False, explanation="observation_required")
+        target = arguments.get("element_id") or arguments.get("target") or arguments.get("selector")
+        candidates = [e for e in observation.elements if e.enabled]
+        if isinstance(target, dict):
+            if set(target) - {"element_id", "label", "role", "automation_id"}:
+                return GroundingResult(success=False, explanation="unsupported_selector")
+            for key, value in target.items():
+                candidates = [e for e in candidates if (e.metadata.get("automation_id") if key == "automation_id"
+                    else getattr(e, key, None)) == value]
+        elif isinstance(target, str) and target:
+            if target.startswith("el_"):
+                candidates = [e for e in candidates if e.element_id == target]
+            else:
+                candidates = [e for e in candidates if e.label == target or e.text == target]
+        elif "x" in arguments and "y" in arguments:
+            x, y = arguments["x"], arguments["y"]
+            candidates = [e for e in candidates if e.width > 0 and e.height > 0 and e.x <= x < e.x+e.width and e.y <= y < e.y+e.height]
+            actionable = [e for e in candidates if e.role not in {"window", "pane", "group", "text"}]
+            if actionable:
+                candidates = actionable
+        else:
+            return GroundingResult(success=False, explanation="target_not_found")
+        if len(candidates) != 1:
+            return GroundingResult(success=False, explanation="ambiguous_target" if candidates else "target_not_found")
+        element = candidates[0]
+        point = element.center_point
+        if "x" in arguments and "y" in arguments:
+            point = arguments["x"], arguments["y"]
+            if not (element.x <= point[0] < element.x+element.width and element.y <= point[1] < element.y+element.height):
+                return GroundingResult(success=False, explanation="Coordinates disagree with observed target")
+        return GroundingResult(success=True, element=element, target_point=point,
+            strategy="atomic_observed_identity", confidence=element.confidence, target_query=target)
+
     ORDINAL_MAP = {
         "first": 0, "1st": 0,
         "second": 1, "2nd": 1,

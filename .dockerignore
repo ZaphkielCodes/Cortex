@@ -1,0 +1,12 @@
+**
+!hub/
+!hub/*.py
+!hub/requirements.txt
+!hub/pipeline/
+!hub/pipeline/*.py
+!shared/
+!shared/*.py
+!agent/
+!agent/*.py
+!deploy/
+!deploy/Dockerfile

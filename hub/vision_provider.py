@@ -407,12 +407,30 @@ def get_vision_provider() -> Optional[VisionProvider]:
     if enabled_env in ("false", "0", "no", "disabled"):
         return None
 
-    prov_type = os.environ.get("CORTEX_VISION_PROVIDER", "gemini").lower()
+    default = "groq" if os.environ.get("CORTEX_LLM_PROVIDER", "direct").lower() in {"direct", "groq", "nvidia"} else "gemini"
+    prov_type = os.environ.get("CORTEX_VISION_PROVIDER", default).lower()
     if prov_type in ("disabled", "none", "off"):
         return None
 
     if prov_type == "mock":
         return MockVisionProvider()
+
+    if prov_type in {"groq", "direct"}:
+        from .direct_router import DirectModelRouter
+        from .direct_vision import DirectVisionProvider
+        from .llm_provider import get_llm_provider
+        router = get_llm_provider()
+        while hasattr(router, "provider"):
+            router = router.provider
+        if not isinstance(router, DirectModelRouter):
+            # A separate explicit Gemini/Ollama reasoning choice must not silently
+            # enable vision without Groq credentials.
+            return None
+        provider = DirectVisionProvider(router)
+        return provider if provider.is_available() else None
+
+    if prov_type != "gemini":
+        return None
 
     # Default to Gemini if API key is present
     api_key = os.environ.get("GEMINI_API_KEY", "")

@@ -143,7 +143,7 @@ class DeviceHandle:
             self.workload = default_workload()
 
         # Phase A7 Privacy Profile derivation
-        if self.device_type == "cloud_worker" or "cloud" in self.device_id.lower():
+        if self.device_type == "cloud_worker":
             if self.locality == "local_device":
                 self.locality = "cloud_worker"
             if self.execution_environment == "on_premise":
@@ -154,7 +154,7 @@ class DeviceHandle:
                 self.private_compute_allowed = False
         elif self.role == "restricted" or self.trust_level == "restricted":
             self.private_compute_allowed = False
-        elif self.role in ("trusted_worker", "admin") and self.device_id != "asus":
+        elif self.role in ("trusted_worker", "admin"):
             if self.locality == "local_device":
                 self.locality = "trusted_lan_device"
 

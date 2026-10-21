@@ -56,7 +56,7 @@ class ExecutorSelector:
         self,
         required_capability: str,
         requested_device: Optional[str] = None,
-        source_device: str = "asus",
+        source_device: str = "",
         owning_device: Optional[str] = None,
         trust_requirement: Optional[str] = None,
         permission_tier: int = 1,
@@ -196,16 +196,13 @@ class ExecutorSelector:
         # -------------------------------------------------------------------
         from .capability_registry import CanonicalCapabilityRegistry
         cap_def = CanonicalCapabilityRegistry.get_instance().get_capability(required_capability)
-        is_hub_cap = (cap_def and cap_def.target_type == "hub") or any(
-            required_capability.startswith(p)
-            for p in (
-                "system.", "hub.", "task.", "memory.", "people.", "speaker.",
-                "social.", "context.", "proactive.", "attention.", "calendar.",
-                "telemetry.", "workload.", "goal.", "web.", "weather.",
-            )
-        )
+        is_hub_cap = bool(cap_def and cap_def.target_type == "hub")
+        # Unavailable integrations do not override real worker capability/privacy checks.
+        if is_hub_cap and cap_def.provider_status.get("integration") and not cap_def.availability:
+            is_hub_cap = False
         if is_hub_cap:
-            exec_dev = requested_device or source_device or "asus"
+            from .config import get_hub_device_id
+            exec_dev = get_hub_device_id()
             return SelectionResult(
                 selected_device=exec_dev,
                 status="success",

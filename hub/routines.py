@@ -374,7 +374,9 @@ class RoutineManager:
         """Learn recurring device usage routines (category='device_usage')."""
         dev_clusters: Dict[Tuple[str, str, int], List[Dict[str, Any]]] = {}
         for s in sessions:
-            dev_id = s.get("device_id") or "asus"
+            dev_id = s.get("device_id")
+            if not dev_id:
+                continue
             weekday = s.get("weekday", "").lower()
             start_str = s.get("start_time", "09:00")
             try:

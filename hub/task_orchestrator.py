@@ -74,7 +74,7 @@ class TaskOrchestrator:
         tasks = await get_tasks()
         count = 0
         for t in tasks:
-            if t.get("type") == "agent_turn":
+            if t.get("type") in {"agent_turn", "request"}:
                 from .session_context import SessionContextManager
                 try:
                     saved = json.loads(t.get("context") or "{}") if isinstance(t.get("context"), str) else dict(t.get("context") or {})
@@ -83,13 +83,22 @@ class TaskOrchestrator:
                 except (ValueError, TypeError):
                     saved = {}
                 result = saved.get("result")
-                if t["status"] == "RUNNING":
+                if t["status"] == "RUNNING" or (saved.get("waiting_device") and not result):
                     from .database import update_task
                     message = "Hub restarted. Completion is unverified; automatic action replay is disabled."
                     result = {"status": "error", "message": message, "task_id": t["id"],
                         "data": {"task_id": t["id"], "error_code": "hub_restart_unverified"}}
+                    compound = saved.get("compound_ui")
+                    if isinstance(compound,dict):
+                        compound.update(current_stage="FAILED",task_status="FAILED",fresh_required=True,
+                            blocked_reason="hub_restart_unverified",verification_result={"verified":False,"reason":"restart_unverified"})
+                        receipt=compound.get("execution_receipt") or {}
+                        if receipt.get("status")=="in_flight":
+                            receipt.update(ran="unverified",retry_safe=False,verification_required=True)
                     await update_task(t["id"], {"status": "WAITING", "last_error": message,
                         "context": dict(saved, result=result, runtime="agent_turn")})
+                if saved.get("parent_request_id"):
+                    continue  # The outer request owns session/delivery reconciliation.
                 if (t.get("assigned_device") and isinstance(result, dict) and
                         result.get("status") not in (None, "in_progress") and
                         isinstance(result.get("message"), str) and result.get("task_id") in (None, t["id"])):
@@ -225,7 +234,7 @@ class TaskOrchestrator:
         if plan is not None or (isinstance(state, str) and not isinstance(context, dict)):
             tid = task_id or (state if isinstance(state, str) else "task_direct")
             t_plan = plan or kwargs.get("plan")
-            src_dev = source_device_id or kwargs.get("source_device_id", "asus")
+            src_dev = source_device_id or kwargs.get("source_device_id", "")
             from .capability_registry import CanonicalCapabilityRegistry
             reg = CanonicalCapabilityRegistry.get_instance()
             cap_name = getattr(t_plan, "capability", None) or getattr(t_plan, "action", None)

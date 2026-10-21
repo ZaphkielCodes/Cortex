@@ -151,6 +151,10 @@ class SessionContextManager:
             "person_name": speaker_info.get("display_name") if speaker_info else None,
             "relationship_type": speaker_info.get("relationship_type") if speaker_info else None,
         }
+        if isinstance(response_data, dict) and isinstance(response_data.get("execution_receipts"), list):
+            turn["execution_receipts"] = [{key: receipt[key] for key in
+                ("capability", "status", "executor_device", "command_id", "observed_at", "snapshot_only")
+                if key in receipt} for receipt in response_data["execution_receipts"][-6:] if isinstance(receipt, dict)]
         if action_plan:
             turn["intent"] = action_plan.get("intent")
             turn["action"] = action_plan.get("action")
@@ -162,7 +166,8 @@ class SessionContextManager:
         if existing is not None:
             # Preserve the original request time and speaker when completing its turn.
             session["turns"][existing_index] = {**turn, **existing,
-                "response_status": response.get("status"), "response_message": response.get("message")}
+                "response_status": response.get("status"), "response_message": response.get("message"),
+                "execution_receipts": turn.get("execution_receipts", existing.get("execution_receipts", []))}
         else:
             session["turns"].append(turn)
         
@@ -237,6 +242,20 @@ class SessionContextManager:
 
         # Phase 8D: Track calendar topic for follow-up resolution
         # Detect if the request was a calendar query and store the topic
+        # Retain only source-labelled window identity, never private titles/contents.
+        # Follow-up turns can re-observe the same window instead of guessing the foreground.
+        if isinstance(response,dict) and response.get("status")=="success":
+            tool_data=response.get("data")
+            provenance=response.get("provenance") or {}
+            if (isinstance(tool_data,dict) and isinstance(tool_data.get("window_id"),int)
+                    and not isinstance(tool_data.get("window_id"),bool) and provenance.get("capability")):
+                receipt={key:tool_data[key] for key in
+                    ("window_id","pid","app_name","foreground_app","process_name","foreground_verified","verification_scope")
+                    if key in tool_data}
+                receipt.update(capability=provenance["capability"],executor_device=provenance.get("executor_device"),
+                               observed_at=provenance.get("retrieved_at"),snapshot_only=True)
+                session["references"]["last_window_receipt"]=receipt
+
         import re as _re
         _clean_req = request.lower().strip(" \t.,!?;:")
         _cal_topic = None

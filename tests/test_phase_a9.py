@@ -21,9 +21,19 @@ import asyncio
 import json
 import pytest
 import pytest_asyncio
+from unittest.mock import AsyncMock
 from httpx import AsyncClient, ASGITransport
 
 from hub.main import app
+
+
+@pytest.fixture(autouse=True)
+def authenticated_component_session(monkeypatch):
+    """A9 state tests simulate an already-authenticated administrator.
+    The real authentication boundary is covered in test_control_auth_boundary.py.
+    """
+    monkeypatch.setattr("hub.main._authenticate_http_headers", AsyncMock(
+        return_value={"device_id": "asus", "role": "admin"}))
 from hub.api_control import emit_activity, get_recent_activities, build_canonical_state
 from hub.system_registry import SystemRegistry
 from hub.executor_registry import ExecutorRegistry
@@ -161,8 +171,13 @@ async def test_devices_panel_liveness():
 
 
 @pytest.mark.asyncio
-async def test_conversation_message_flow():
-    """Verify sending a conversation message through UI control API executes and returns response."""
+async def test_conversation_message_flow(monkeypatch):
+    """Real GUI/AgentTurn wiring with an explicit offline model decision."""
+    from test_agent_turn_runtime import ScriptedModel
+    from hub.agent_harness import AgentHarness
+    from hub.control_layer import CortexControlLayer
+    model = ScriptedModel([{"decision":"RESPOND","response_text":"I am Cortex, your computer assistant."}])
+    monkeypatch.setattr("hub.main._agent_harness", AgentHarness(CortexControlLayer({}), model), raising=False)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -172,7 +187,9 @@ async def test_conversation_message_flow():
         assert resp.status_code == 200
         data = resp.json()
         assert "response_text" in data
-        assert data["status"] in ("success", "unsupported", "error")
+        assert data["status"] == "success"
+        assert data["response_text"] == "I am Cortex, your computer assistant."
+        assert len(model.calls) == 1 and model.calls[0][1]["mode"] == "agent_decision"
         assert data["user_message"] == "What is your identity?"
 
 
