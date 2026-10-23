@@ -248,6 +248,8 @@ async def _authenticate(ws, device_id: str, secret: str) -> bool:
             "platform": platform.system(),
             "capabilities": get_capabilities(),
         }
+        from .discovery import advertisement
+        auth_response['discovery'] = advertisement(device_id).model_dump()
         await ws.send(json.dumps(auth_response))
 
         # Wait for auth result
@@ -278,8 +280,19 @@ async def _authenticate(ws, device_id: str, secret: str) -> bool:
 # ---------------------------------------------------------------------------
 async def _heartbeat(ws, device_id: str, stop: asyncio.Event) -> None:
     """Send a status:online ping every HEARTBEAT_INTERVAL seconds."""
+    generation = 0
+    previous = None
     while not stop.is_set():
         try:
+            from .discovery import advertisement
+            batch = advertisement(device_id)
+            signature = batch.model_dump_json()
+            if previous is not None and signature != previous: generation += 1
+            previous = signature
+            batch.generation = generation
+            await ws.send(json.dumps({'type':'capability_advertisement','device_id':device_id,
+                'platform':platform.system(),'capabilities':[c.capability_id for c in batch.capabilities],
+                'discovery':batch.model_dump()}))
             await ws.send(json.dumps({"type": "status", "status": "online"}))
             log.debug(f"Heartbeat sent ({device_id})")
         except Exception:

@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+from shared.discovery import AdvertisementBatch
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +132,7 @@ class CapabilityAdvertisementMessage(BaseModel):
     platform: Optional[str] = None
     agent_version: Optional[str] = None
     transports: Optional[Dict[str, bool]] = None
+    discovery: Optional[AdvertisementBatch] = None
 
 
 class AuthResponse(BaseModel):
@@ -143,6 +145,7 @@ class AuthResponse(BaseModel):
     device_type: Optional[str] = None
     agent_version: Optional[str] = None
     transports: Optional[Dict[str, bool]] = None
+    discovery: Optional[AdvertisementBatch] = None
 
 
 # ---------------------------------------------------------------------------

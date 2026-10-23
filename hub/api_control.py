@@ -550,12 +550,23 @@ async def stop_task_endpoint(task_id: str, req: TaskActionRequest = None):
     stored = await get_task(task_id)
     tom = TaskOwnershipManager.get_instance()
     execution = await tom.get_execution(task_id)
+    # A stale control must never overwrite a durable outcome. The legacy
+    # dashboard uses this endpoint directly, without Workspace's terminal guard.
+    current_status = (goal.status if goal else stored.get("status") if stored else
+                      execution.execution_state if execution else "")
+    if str(current_status).upper() in {
+        "COMPLETED", "CANCELLED", "FAILED", "DENIED", "EXPIRED", "INTERRUPTED",
+        "SUCCESS", "ERROR", "UNSUPPORTED", "VERIFICATION_FAILED",
+    }:
+        raise HTTPException(status_code=409, detail="The task has already ended; refresh its state.")
     if goal:
         await gm.cancel_goal(task_id, reason="Cancelled from Control Center")
     elif stored:
         from .request_lifecycle import RequestLifecycle
         RequestLifecycle.cancel_task(task_id)
         AgentTurn.cancel_task(task_id)
+        from .orchestration import Orchestrator
+        Orchestrator.cancel(task_id)
         await update_task(task_id, {"status": "CANCELLED" if stored.get("type") == "agent_turn" else "cancelled"})
     elif execution:
         await tom.expire_lease(task_id)
@@ -767,6 +778,10 @@ async def control_websocket_endpoint(websocket: WebSocket):
                 if tid:
                     from .agent_turn import AgentTurn
                     AgentTurn.cancel_task(tid)
+                    from .request_lifecycle import RequestLifecycle
+                    from .orchestration import Orchestrator
+                    RequestLifecycle.cancel_task(tid)
+                    Orchestrator.cancel(tid)
                     gm = GoalManager.get_instance()
                     goal = await gm.get_goal(tid)
                     if goal:

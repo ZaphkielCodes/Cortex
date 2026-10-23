@@ -43,6 +43,8 @@ class DirectLLMProvider(LLMProvider):
         self.max_privacy_class = "PUBLIC" if provider == "nvidia" else "SENSITIVE"
         self.last_usage = None
         self.last_rate_limits = {}
+        self.last_error_metadata = None
+        self.last_payload_metrics = None
 
     @property
     def name(self):
@@ -72,7 +74,12 @@ class DirectLLMProvider(LLMProvider):
                        'Use only available_capabilities; otherwise return an empty plan with unachievable_reason.')
         if context.get("force_task_orchestration"):
             system += "\nReturn a JSON ModelResult with type TASK_STEP and step_decision."
-        if structured:
+        a14_contract = context.get('a14_inference_contract') is True
+        native = self.name=='groq' and mode=='agent_decision' and context.get('decision_schema')
+        if structured and a14_contract and not native:
+            from .orchestration_inference import contract_instruction
+            system = contract_instruction(system, 'Return only a valid JSON object.')
+        elif structured and not a14_contract:
             system += "\nReturn only a valid JSON object."
         # AgentTurn has already minimized evidence and built its catalog in system_prompt.
         # Preserve its full bounded history rather than truncating context a second time.
@@ -99,10 +106,33 @@ class DirectLLMProvider(LLMProvider):
                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
                    "temperature": 0.1, "max_tokens": 1024 if structured else 768}
         if self.name == "groq" and mode == "agent_decision" and context.get("decision_schema"):
+            schema = context['decision_schema']
+            if context.get('a14_inference_contract') is True:
+                from .orchestration_inference import compact_schema
+                schema = dict(compact_schema(schema), **({'title':schema['title']} if 'title' in schema else {}))
+                # Only remove an exact duplicate of this trusted schema. Text-only
+                # transports still receive the complete schema in their prompt.
+                marker = '\nA14_OUTPUT_SCHEMA:\n'
+                prompt = payload['messages'][0]['content']
+                if marker in prompt:
+                    head, tail = prompt.rsplit(marker,1)
+                    duplicate = tail.removesuffix('\nReturn only a valid JSON object.')
+                    try: same = compact_schema(json.loads(duplicate)) == compact_schema(schema)
+                    except ValueError: same = False
+                    if same:
+                        payload['messages'][0]['content'] = head + '\nUse the native function parameter schema; return only its JSON arguments.'
             payload["tools"]=[{"type":"function","function":{"name":"agent_decision",
                 "description":"Return one validated Cortex decision proposal. The local runtime alone authorizes execution.",
-                "parameters":context["decision_schema"]}}]
+                "parameters":schema}}]
             payload["tool_choice"]={"type":"function","function":{"name":"agent_decision"}}
+            if context.get('a14_inference_contract') is True:
+                from .orchestration_inference import contract_instruction
+                instruction = (
+                    'Native output contract: call the provided agent_decision function exactly once. '
+                    'Pass the JSON proposal matching its parameter schema as function arguments. '
+                    'Do not emit a text response or a JSON object outside that function call. '
+                    'This function only submits a proposal; it does not execute any Cortex capability.')
+                payload['messages'][0]['content'] = contract_instruction(payload['messages'][0]['content'], instruction)
         elif self.name == "groq" and structured:
             payload["response_format"] = {"type": "json_object"}
             if mode == "agent_decision":
@@ -116,6 +146,10 @@ class DirectLLMProvider(LLMProvider):
         if self.name == "nvidia" and context.get("privacy_class") != "PUBLIC":
             raise ReasoningProviderUnavailable("PRIVATE_MODEL_REQUIRED")
         payload = self.payload(user_text, context)
+        from .inference_metrics import payload_metrics
+        self.last_payload_metrics = payload_metrics(payload)
+        self.last_error_metadata = None
+        log.info('model_wire_budget provider=%s model=%s metrics=%s', self.name,self.model,self.last_payload_metrics)
         text_bytes = sum(len(m["content"].encode("utf-8")) if isinstance(m["content"], str)
                          else len(m["content"][0]["text"].encode("utf-8")) for m in payload["messages"])
         log.info("model_prompt_budget provider=%s model=%s text_bytes=%s estimated_input_tokens=%s",
@@ -156,6 +190,19 @@ class DirectLLMProvider(LLMProvider):
                         # Never log provider error messages: they can echo prompts or credentials.
                         try:
                             provider_error = response.json().get("error") or {}
+                            failed = provider_error.get('failed_generation')
+                            failed_shape = None
+                            if isinstance(failed,str):
+                                failed_shape={'bytes':len(failed.encode()),'format':'unparsed'}
+                                try:
+                                    decoded=json.loads(failed)
+                                    if isinstance(decoded,dict):
+                                        failed_shape['format']='json_object'
+                                        failed_shape['recognized_fields']=sorted(set(decoded)&{
+                                            'decision','capability','arguments','response_text','name','parameters','tool_calls','function'})
+                                except ValueError:
+                                    if failed.lstrip().startswith(('<function=', '<tool_call>', '<|python_tag|>')):
+                                        failed_shape['format']='tool_markup'
                             code = provider_error.get("code")
                             # Extract numeric quota metadata only; never retain/print raw messages.
                             message = provider_error.get("message") or ""
@@ -165,6 +212,7 @@ class DirectLLMProvider(LLMProvider):
                             numbers = {key:int(value) for key,value in quantities}
                             error.quota_metadata = {"quota_scope": ",".join(sorted(set(scope))) or None,
                                 "known_limit":numbers.get("Limit"),"known_used":numbers.get("Used"),
+                                "known_requested":numbers.get("Requested"),
                                 "known_remaining":max(0,numbers["Limit"]-numbers["Used"]) if "Limit" in numbers and "Used" in numbers else None}
                             if response.status_code == 429:
                                 if "TPD" in scope and not response.headers.get("retry-after"):
@@ -177,9 +225,20 @@ class DirectLLMProvider(LLMProvider):
                                             {key: int(value) for key,value in quantities})
                         except (ValueError, AttributeError, TypeError):
                             code = None
+                            failed_shape = None
                         safe_codes = {"tool_use_failed", "json_validate_failed", "rate_limit_exceeded",
                             "context_length_exceeded", "model_not_found", "invalid_api_key", "invalid_request_error"}
                         error.provider_error_code = code if isinstance(code, str) and code in safe_codes else "unclassified"
+                        # Preserve observations without rewriting status/classification
+                        # or retaining bodies, organization IDs, keys, or prompts.
+                        from .inference_metrics import safe_rate_headers
+                        self.last_error_metadata = {'http_status':response.status_code,
+                            'provider_error_code':error.provider_error_code,
+                            'failed_generation_shape':failed_shape,
+                            'quota_scopes':error.quota_scopes, 'quota_metadata':error.quota_metadata,
+                            'rate_limit_headers':safe_rate_headers(self.last_rate_limits)}
+                        log.warning('provider_failure_evidence provider=%s model=%s metadata=%s',
+                                    self.name,self.model,self.last_error_metadata)
                         log.warning("direct_http_failure provider=%s status=%s code=%s", self.name,
                                     response.status_code, error.provider_error_code)
                         raise error

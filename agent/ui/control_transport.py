@@ -84,6 +84,7 @@ class DesktopControlTransport:
             ("POST", "/api/control/autonomy"), ("POST", "/api/control/tasks/pause_all"),
             ("GET", "/memory/"), ("POST", "/memory/"), ("GET", "/tasks/"),
             ("POST", "/integrations/default-account"),
+            ("POST", "/api/workspace/sync"), ("POST", "/api/workspace/action"),
         }
         patterns = {"GET": [r"/tasks/[A-Za-z0-9_-]{1,128}"],
                     "PUT": [r"/memory/[A-Za-z0-9_-]{1,128}"],

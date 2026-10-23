@@ -318,6 +318,9 @@ class IntegrationRegistry:
             result=NormalizedResult(status=status,provider=provider,capability=capability,message="Integration operation unavailable: "+category+".",
                 error={"category":category,"http_status":getattr(exc,"http_status",None),"diagnostic":getattr(exc,"diagnostic",None)},retrieved_at=now,
                 side_effects_possible=bool(dispatched and cap and cap.effect!=Effect.READ),retry_safe=bool(cap and cap.effect==Effect.READ))
+            if isinstance(exc,ValidationError):
+                result.error["validation_issues"]=[{"field":list(e["loc"]),"type":e["type"]}
+                    for e in exc.errors(include_input=False,include_context=False)[:6]]
             if provider in self.health and (dispatched or category=="AUTH_REQUIRED") and category not in ("INVALID_ARGUMENT","SCOPE_MISSING","APPROVAL_REQUIRED"):
                 health=self.health[provider]
                 health.update(last_error=category,state={"AUTH_REQUIRED":"auth_required","RATE_LIMITED":"rate_limited",

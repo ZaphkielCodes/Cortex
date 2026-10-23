@@ -1,0 +1,41 @@
+{
+  "verified_at": "2026-10-22",
+  "not_a_quota_override": true,
+  "sources": [
+    {
+      "provider": "groq",
+      "models": [
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-120b"
+      ],
+      "live_metadata": "https://api.groq.com/openai/v1/models",
+      "documents": [
+        "https://console.groq.com/docs/model/qwen/qwen3.8-27b",
+        "https://console.groq.com/docs/model/openai/gpt-oss-120b"
+      ],
+      "notes": "Live context 131072 for both; Qwen documentation says 131042, so use the smaller figure. Both advertise tool use. No numeric quota is configured here."
+    },
+    {
+      "provider": "gemini",
+      "models": [
+        "gemini-3.8-flash"
+      ],
+      "live_metadata": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash",
+      "document": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash",
+      "notes": "1048576 input / 65536 output, separate budgets. Router estimate including output is conservative."
+    },
+    {
+      "provider": "nvidia",
+      "models": [
+        "deepseek-ai/deepseek-v4.1-flash",
+        "z-ai/glm-5.3"
+      ],
+      "live_metadata": "https://integrate.api.nvidia.com/v1/models",
+      "documents": [
+        "https://docs.api.nvidia.com/nim/reference/nvidia-deepseek-v4_1-flash",
+        "https://build.nvidia.com/z-ai/glm-5-3/modelcard"
+      ],
+      "notes": "Exact model IDs present in live API. Context from NVIDIA model cards; endpoint-specific lower caps remain possible. PUBLIC-only trial terms unchanged."
+    }
+  ]
+}

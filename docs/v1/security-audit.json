@@ -1,0 +1,49 @@
+{
+  "candidate_count_before_v1_docs": 378,
+  "sensitive_path_findings": [],
+  "pattern_findings": [
+    {
+      "path": "tests/test_a12_workspace.py",
+      "line": 91,
+      "kind": "literal_secret"
+    },
+    {
+      "path": "tests/test_direct_routing.py",
+      "line": 17,
+      "kind": "literal_secret"
+    },
+    {
+      "path": "tests/test_phase8a_runtime.py",
+      "line": 318,
+      "kind": "literal_secret"
+    },
+    {
+      "path": "tests/test_phase8r_observability.py",
+      "line": 299,
+      "kind": "provider_key"
+    },
+    {
+      "path": "tests/test_phase8r_observability.py",
+      "line": 318,
+      "kind": "provider_key"
+    },
+    {
+      "path": "tests/test_phase9f_lifecycle.py",
+      "line": 97,
+      "kind": "literal_secret"
+    },
+    {
+      "path": "tests/test_phase_a10.py",
+      "line": 446,
+      "kind": "literal_secret"
+    },
+    {
+      "path": "tests/test_provider_capacity.py",
+      "line": 24,
+      "kind": "literal_secret"
+    }
+  ],
+  "pattern_disposition": "All eight matches inspected: synthetic fixtures, mock credentials or redaction canaries; no actual credential identified.",
+  "exact_local_credential_matches": [],
+  "limitations": "Heuristic and exact-known-value scan, not a guarantee of absence. OS keyring values not exported. Existing Git history not rewritten or comprehensively audited. Ignored private files remain on disk."
+}

@@ -1,0 +1,598 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": false,
+      "properties": {
+        "action_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Action Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "cancel_task",
+          "title": "Kind",
+          "type": "string"
+        },
+        "task_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "label": {
+          "const": "Cancel task",
+          "default": "Cancel task",
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action_id",
+        "kind",
+        "task_id"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "ActionRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "cancel_task",
+          "title": "Kind",
+          "type": "string"
+        },
+        "task_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "action_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Action Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "task_id",
+        "action_id"
+      ],
+      "title": "ActionRequest",
+      "type": "object"
+    },
+    "Card": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 240,
+          "title": "Title",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "kind": {
+          "const": "card",
+          "default": "card",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 2000,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "provenance",
+        "text"
+      ],
+      "title": "Card",
+      "type": "object"
+    },
+    "Cursor": {
+      "additionalProperties": false,
+      "properties": {
+        "epoch": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Epoch"
+        },
+        "revision": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "title": "Cursor",
+      "type": "object"
+    },
+    "Envelope": {
+      "additionalProperties": false,
+      "properties": {
+        "protocol_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Protocol Version",
+          "type": "integer"
+        },
+        "epoch": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Epoch",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 0,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "snapshot",
+            "delta"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "base_revision": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Revision"
+        },
+        "generated_at": {
+          "title": "Generated At",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "card": "#/$defs/Card",
+                "error": "#/$defs/Notice",
+                "progress": "#/$defs/Progress",
+                "status": "#/$defs/Notice",
+                "table": "#/$defs/Table",
+                "task": "#/$defs/TaskDetails",
+                "timeline": "#/$defs/Timeline"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/Card"
+              },
+              {
+                "$ref": "#/$defs/Table"
+              },
+              {
+                "$ref": "#/$defs/Progress"
+              },
+              {
+                "$ref": "#/$defs/Timeline"
+              },
+              {
+                "$ref": "#/$defs/TaskDetails"
+              },
+              {
+                "$ref": "#/$defs/Notice"
+              }
+            ]
+          },
+          "maxItems": 128,
+          "title": "Items",
+          "type": "array"
+        },
+        "removed": {
+          "items": {
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Removed",
+          "type": "array"
+        }
+      },
+      "required": [
+        "epoch",
+        "revision",
+        "mode",
+        "generated_at",
+        "items"
+      ],
+      "title": "Envelope",
+      "type": "object"
+    },
+    "Notice": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 240,
+          "title": "Title",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "kind": {
+          "enum": [
+            "status",
+            "error"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 2000,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "provenance",
+        "kind",
+        "text"
+      ],
+      "title": "Notice",
+      "type": "object"
+    },
+    "Progress": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 240,
+          "title": "Title",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "kind": {
+          "const": "progress",
+          "default": "progress",
+          "title": "Kind",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "RUNNING",
+            "WAITING",
+            "COMPLETED",
+            "FAILED",
+            "CANCELLED",
+            "PAUSED",
+            "DENIED",
+            "UNKNOWN"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        },
+        "label": {
+          "maxLength": 2000,
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "provenance",
+        "status",
+        "label"
+      ],
+      "title": "Progress",
+      "type": "object"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "enum": [
+            "task_db",
+            "capability_receipt",
+            "execution_trace",
+            "capability_discovery"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "task_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "updated_at": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "task_id"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "Table": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 240,
+          "title": "Title",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "kind": {
+          "const": "table",
+          "default": "table",
+          "title": "Kind",
+          "type": "string"
+        },
+        "columns": {
+          "items": {
+            "maxLength": 80,
+            "type": "string"
+          },
+          "maxItems": 6,
+          "title": "Columns",
+          "type": "array"
+        },
+        "rows": {
+          "items": {
+            "items": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "maxItems": 6,
+            "type": "array"
+          },
+          "maxItems": 20,
+          "title": "Rows",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "provenance",
+        "columns",
+        "rows"
+      ],
+      "title": "Table",
+      "type": "object"
+    },
+    "TaskDetails": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 240,
+          "title": "Title",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "kind": {
+          "const": "task",
+          "default": "task",
+          "title": "Kind",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "RUNNING",
+            "WAITING",
+            "COMPLETED",
+            "FAILED",
+            "CANCELLED",
+            "PAUSED",
+            "DENIED",
+            "UNKNOWN"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Description",
+          "type": "string"
+        },
+        "result": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Result",
+          "type": "string"
+        },
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/Action"
+          },
+          "maxItems": 1,
+          "title": "Actions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "provenance",
+        "status"
+      ],
+      "title": "TaskDetails",
+      "type": "object"
+    },
+    "Timeline": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 240,
+          "title": "Title",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "kind": {
+          "const": "timeline",
+          "default": "timeline",
+          "title": "Kind",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/TimelineEntry"
+          },
+          "maxItems": 32,
+          "title": "Entries",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "provenance",
+        "entries"
+      ],
+      "title": "Timeline",
+      "type": "object"
+    },
+    "TimelineEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "At",
+          "type": "string"
+        },
+        "stage": {
+          "maxLength": 2000,
+          "title": "Stage",
+          "type": "string"
+        },
+        "detail": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage"
+      ],
+      "title": "TimelineEntry",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/Envelope"
+    },
+    {
+      "$ref": "#/$defs/Cursor"
+    },
+    {
+      "$ref": "#/$defs/ActionRequest"
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

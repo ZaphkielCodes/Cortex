@@ -17,6 +17,19 @@ class ExecutionDispatcher:
             integrations=IntegrationRegistry.get_instance()
             if integrations.get(action):
                 result=await integrations.execute(action,args,source_device,privacy_context)
+                # The integration API retains structured errors; the existing
+                # executor receipt protocol uses a scalar error discriminator.
+                # Preserve diagnostics without passing a dict to legacy set checks.
+                if isinstance(result.get("error"),dict):
+                    detail=result["error"]
+                    result=dict(result,error=detail["category"],
+                        data={**result.get("data",{}),"integration_error":detail})
+            elif action == 'agent.orchestrate':
+                if args or not source_device:
+                    return {'status': 'denied', 'message': 'Orchestration requires an authenticated parent request and no executable arguments.'}
+                from ..orchestration import Orchestrator
+                from ..model_router import get_model_router
+                result = await Orchestrator(control_layer, get_model_router()).execute(source_device, request_id, privacy_context or {})
             elif action == "system.runtime_state":
                 if not source_device:
                     return {"status": "denied", "message": "An authenticated requesting device is required."}

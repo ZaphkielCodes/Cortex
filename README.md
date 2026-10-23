@@ -1,8 +1,12 @@
 # Cortex
 
+## Active delivery plan: Cortex v1
+
+The [v1 product definition](docs/v1/product-definition.md), [roadmap](docs/v1/development-roadmap.md) and [evidence ledger](docs/v1/evidence-ledger.md) supersede A1–A14 as the delivery plan. Historical architecture remains preserved. The old 82% Goal Meter is retired. Stage 1 has not started; see the [Stage 0 audit](docs/v1/baseline-audit.md) for the measured baseline.
+
 Cortex is a Windows-first, cross-device personal computing assistant. A Python hub coordinates a desktop agent, a React/PyQt interface, voice providers, and enrolled devices.
 
-The current runtime follows a model-driven path: user request → AgentTurn → capability selection → permission and privacy checks → execution → result interpretation → response. Long-running work uses background tasks. UI text entry uses observed editable controls and verification rather than app-specific typing recipes.
+The current runtime follows a model-driven path: user request â†’ AgentTurn â†’ capability selection â†’ permission and privacy checks â†’ execution â†’ result interpretation â†’ response. Long-running work uses background tasks. UI text entry uses observed editable controls and verification rather than app-specific typing recipes.
 
 This is an actively developed prototype. Automated checks do not establish that every app, provider, or physical multi-device workflow works. Ordinary requests require model reasoning; the old phrase-routing compatibility flag no longer enables a second path. A11 has not been started in this migration.
 

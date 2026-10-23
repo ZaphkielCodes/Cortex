@@ -147,7 +147,8 @@ class CanonicalCapabilityRegistry:
     def list_capabilities(self) -> List[RegisteredCapability]:
         """Return list of all registered capabilities."""
         self._refresh_dynamic_providers()
-        return sorted(self._capabilities.values(),key=lambda c:-c.provider_status.get("preference",0) if c.availability else 0)
+        return sorted((c for c in self._capabilities.values() if not c.provider_status.get('discovery_only')),
+            key=lambda c:-c.provider_status.get("preference",0) if c.availability else 0)
 
     def get_all(self) -> Dict[str, RegisteredCapability]:
         """Return dictionary of all registered capabilities."""
@@ -163,7 +164,13 @@ class CanonicalCapabilityRegistry:
         Return capabilities that are available and optionally supported by a target device.
         """
         self._refresh_dynamic_providers()
-        caps = [c for c in self._capabilities.values() if c.availability]
+        caps = [c for c in self._capabilities.values() if c.availability and not c.provider_status.get('discovery_only')]
+        if device_id:
+            from .executor_registry import ExecutorRegistry
+            handle = ExecutorRegistry.get_instance().get_device_handle(device_id)
+            if handle and handle.metadata.get('capability_discovery'):
+                caps = [c for c in caps if c.target_type == 'hub' or
+                        handle.online and handle.supports_capability(c.name)]
         if filter_supported is not None:
             supported_set = set(filter_supported)
             caps = [c for c in caps if c.name in supported_set or c.target_type == "hub"]
@@ -926,7 +933,7 @@ class CanonicalCapabilityRegistry:
             # Device Telemetry & Notifications
             "device.status": RegisteredCapability(
                 name="device.status",
-                description="Query and retrieve device telemetry, power status, and battery percentage.",
+                description="Read battery charge and AC power status.",
                 arguments={
                     "target_device": {"type": "string", "required": False, "description": "Target device ID"},
                 },
@@ -1233,7 +1240,7 @@ class CanonicalCapabilityRegistry:
             # Telemetry
             "telemetry.get_system_usage": RegisteredCapability(
                 name="telemetry.get_system_usage",
-                description="Inspect current system telemetry (CPU, RAM, and Disk metrics).",
+                description="Read CPU, RAM and disk usage metrics.",
                 arguments={
                     "target_device": {"type": "string", "required": False, "description": "Device ID to inspect (default local device)"},
                 },
@@ -1283,9 +1290,10 @@ class CanonicalCapabilityRegistry:
                 classification="read",
                 target_type="hub",
                 permission_tier=1,
-                availability=True,
+                availability=False,
                 provider="calendar_adapter",
-                provider_status={"provider": "calendar_adapter", "available": True},
+                provider_status={"provider": "calendar_adapter", "available": False,
+                                 "discovery_only": True, "reason": "unimplemented_legacy_capability"},
                 side_effect_class="none",
             ),
             "calendar.get_next": RegisteredCapability(
@@ -1296,9 +1304,10 @@ class CanonicalCapabilityRegistry:
                 classification="read",
                 target_type="hub",
                 permission_tier=1,
-                availability=True,
+                availability=False,
                 provider="calendar_adapter",
-                provider_status={"provider": "calendar_adapter", "available": True},
+                provider_status={"provider": "calendar_adapter", "available": False,
+                                 "discovery_only": True, "reason": "unimplemented_legacy_capability"},
                 side_effect_class="none",
             ),
             "calendar.get_availability": RegisteredCapability(
@@ -1309,9 +1318,10 @@ class CanonicalCapabilityRegistry:
                 classification="read",
                 target_type="hub",
                 permission_tier=1,
-                availability=True,
+                availability=False,
                 provider="calendar_adapter",
-                provider_status={"provider": "calendar_adapter", "available": True},
+                provider_status={"provider": "calendar_adapter", "available": False,
+                                 "discovery_only": True, "reason": "unimplemented_legacy_capability"},
                 side_effect_class="none",
             ),
             # Workload
@@ -1745,11 +1755,25 @@ class CanonicalCapabilityRegistry:
             ),
         }
 
+        caps['agent.orchestrate'] = RegisteredCapability(
+            name='agent.orchestrate',
+            description='Delegate parallel worker agents. Run the entire complex request as an A14 dependency graph with independent workers, capability execution and verified synthesis. Select one CALL_CAPABILITY with arguments {} to delegate; the original request is obtained from its owned AgentTurn. Do not execute one substep first or claim workers ran without this capability. This capability does not need a separate PLAN, success_condition or expected_effect; its data.verified is the graph verification receipt. Simple requests use direct capabilities or a direct response. Delegation grants no permissions.',
+            arguments={}, target_type='hub', permission_tier=1, risk='low', classification='read',
+            provider='orchestrator', result_source='verified_subtasks', side_effect_class='none')
         caps["hub.transfer_file"] = RegisteredCapability(
             name="hub.transfer_file", description="Copy a real file between enrolled workers over paired TLS. Destination is relative to the receiver's configured folder; never overwrites or deletes the source.",
             arguments={key: {"type": "string", "required": True} for key in
                        ("source_device", "destination_device", "source_path", "destination_path")},
             target_type="hub", permission_tier=2, risk="high", classification="write", side_effect_class="filesystem")
+        # Existing agent session handlers, now described by the same canonical
+        # catalog as native handlers. This does not add execution authority.
+        from .permissions import COMMAND_TIERS
+        for name in ('transfer.inspect','transfer.prepare','transfer.send','transfer.cancel',
+                     'voice.mute','voice.unmute','voice.push_to_talk'):
+            caps[name] = RegisteredCapability(name=name, description='Existing authenticated agent session control: '+name,
+                arguments={},target_type='device',permission_tier=COMMAND_TIERS.get(name,3),
+                risk='low' if name=='transfer.inspect' or name.startswith('voice.') else 'medium',
+                classification='read' if name=='transfer.inspect' else 'device_action',provider_status={'discovery_only':True})
         self._capabilities = caps
 
 

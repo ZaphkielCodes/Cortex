@@ -75,6 +75,8 @@ def schema(model_name, **fields):
 
 
 Text = (str, Field(min_length=1, max_length=2000))
+Time = (str, Field(min_length=1, max_length=80, json_schema_extra={"format":"date-time"},
+                   description="RFC3339 timestamp with an explicit timezone offset or Z; end must be after start."))
 ID = (str, Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"))
 Limit = (int, Field(default=10, ge=1, le=25))
 G = "https://www.googleapis.com/auth/"
@@ -96,9 +98,9 @@ def definitions():
         cap("email.search","google_gmail","Search email and return message identifiers",schema("EmailSearch",query=Text,max_results=Limit),[G+"gmail.readonly"],fields=("id","threadId")),
         cap("email.read","google_gmail","Read one email's requested metadata or bounded plain text",schema("EmailRead",message_id=ID,include_body=(bool,False)),[G+"gmail.readonly"],fields=("id","subject","from","to","date","body","body_available")),
         cap("email.send","google_gmail","Send a plain-text email after explicit action approval",schema("EmailSend",to=Text,subject=Text,body=(str,Field(max_length=20000))),[G+"gmail.send"],Effect.SEND,("id","threadId")),
-        cap("calendar.list","google_calendar","List events in an explicit bounded time window",schema("CalendarList",time_min=Text,time_max=Text,max_results=Limit,calendar_id=(str,Field(default="primary",max_length=256))),[G+"calendar.events.readonly"],fields=("id","summary","start","end","status"),privacy="PERSONAL"),
-        cap("calendar.create","google_calendar","Create a calendar event after explicit action approval",schema("CalendarCreate",summary=Text,start=Text,end=Text,time_zone=Text,calendar_id=(str,"primary")),[G+"calendar.events"],Effect.WRITE,("id","summary","start","end","status"),"PERSONAL"),
-        cap("calendar.update","google_calendar","Update specified event fields after explicit action approval",schema("CalendarUpdate",event_id=ID,summary=Text,start=Text,end=Text,time_zone=Text,calendar_id=(str,"primary")),[G+"calendar.events"],Effect.WRITE,("id","summary","start","end","status"),"PERSONAL"),
+        cap("calendar.list","google_calendar","List events in an explicit bounded time window",schema("CalendarList",time_min=Time,time_max=Time,max_results=Limit,calendar_id=(str,Field(default="primary",max_length=256))),[G+"calendar.events.readonly"],fields=("id","summary","start","end","status"),privacy="PERSONAL"),
+        cap("calendar.create","google_calendar","Create a calendar event after explicit action approval",schema("CalendarCreate",summary=Text,start=Time,end=Time,time_zone=Text,calendar_id=(str,"primary")),[G+"calendar.events"],Effect.WRITE,("id","summary","start","end","status"),"PERSONAL"),
+        cap("calendar.update","google_calendar","Update specified event fields after explicit action approval",schema("CalendarUpdate",event_id=ID,summary=Text,start=Time,end=Time,time_zone=Text,calendar_id=(str,"primary")),[G+"calendar.events"],Effect.WRITE,("id","summary","start","end","status"),"PERSONAL"),
         cap("contacts.search","google_contacts","Search contacts with minimized names and email fields",schema("ContactSearch",query=Text,max_results=Limit),[G+"contacts.readonly"],fields=("resourceName","names","emailAddresses")),
         cap("drive.search","google_drive","Search Drive file metadata; no file contents",schema("DriveSearch",query=Text,max_results=Limit),[G+"drive.metadata.readonly"],fields=("id","name","mimeType","modifiedTime")),
         cap("drive.read","google_drive","Read file metadata or explicitly requested bounded plain-text content",schema("DriveRead",file_id=ID,include_content=(bool,False)),[G+"drive.readonly"],fields=("id","name","mimeType","size","content")),

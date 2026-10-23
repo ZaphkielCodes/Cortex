@@ -757,7 +757,7 @@ async def agent_endpoint(websocket: WebSocket, device_id: str):
         return
 
     # Verify: agent sends its raw secret, we bcrypt-check it
-    if not verify_secret(auth_resp.response, device["secret_hash"]):
+    if auth_resp.device_id != device_id or not verify_secret(auth_resp.response, device["secret_hash"]):
         log.warning(f"Auth FAILED for device: {device_id}")
         await websocket.send_text(
             AuthResult(success=False, message="Authentication failed.").model_dump_json()
@@ -765,14 +765,14 @@ async def agent_endpoint(websocket: WebSocket, device_id: str):
         await websocket.close(code=4004, reason="Authentication failed")
         return
 
-    # Auth succeeded
-    await websocket.send_text(
-        AuthResult(success=True, message="Authenticated.").model_dump_json()
-    )
-    
-    # Save capabilities and platform
-    await update_device_capabilities(device_id, auth_resp.platform, auth_resp.capabilities)
-    
+    # A rejected advertisement must not replace or disconnect an existing executor.
+    from .discovery import validate_advertisement
+    try:
+        validate_advertisement(device_id,auth_resp.discovery)
+    except ValueError:
+        await websocket.close(code=4003,reason='Invalid capability discovery')
+        return
+
     # Phase A5: Register in ExecutorRegistry
     from .executor_registry import ExecutorRegistry
     ExecutorRegistry.get_instance().on_device_connected(device_id, websocket)
@@ -786,6 +786,16 @@ async def agent_endpoint(websocket: WebSocket, device_id: str):
         role=device.get("role"),
         trust_level=device.get("trust_level"),
     )
+    from .discovery import reconcile
+    try:
+        accepted = reconcile(ExecutorRegistry.get_instance(), device_id, auth_resp.discovery,
+            legacy_names=auth_resp.capabilities)
+        await update_device_capabilities(device_id, auth_resp.platform, accepted)
+    except ValueError:
+        ExecutorRegistry.get_instance().on_device_disconnected(device_id)
+        await websocket.close(code=4003,reason='Invalid capability discovery')
+        return
+    await websocket.send_text(AuthResult(success=True,message='Authenticated.').model_dump_json())
     
     log.info(f"✓ Device authenticated: {device_id} (role={device['role']})")
     _er = ExecutorRegistry.get_instance()
@@ -830,10 +840,15 @@ async def agent_endpoint(websocket: WebSocket, device_id: str):
                 continue
 
             try:
+                if CONNECTED_DEVICES.get(device_id) is not websocket:
+                    await websocket.close(code=4010,reason='Session replaced')
+                    break
                 if envelope.type == "heartbeat":
                     from .models import HeartbeatMessage
                     from .database import update_device_heartbeat
                     hb = HeartbeatMessage(**data)
+                    if hb.device_id != device_id:
+                        raise ValueError('Heartbeat identity mismatch')
                     log.info(f"[{device_id}] Heartbeat: state={hb.state} tasks={hb.active_task_count}")
                     await update_device_heartbeat(
                         device_id=device_id,
@@ -855,16 +870,12 @@ async def agent_endpoint(websocket: WebSocket, device_id: str):
                 elif envelope.type == "capability_advertisement":
                     from .models import CapabilityAdvertisementMessage
                     cap_msg = CapabilityAdvertisementMessage(**data)
+                    if cap_msg.device_id != device_id:
+                        raise ValueError('Advertisement identity mismatch')
                     log.info(f"[{device_id}] Capability advertisement: {len(cap_msg.capabilities)} caps")
-                    await update_device_capabilities(device_id, cap_msg.platform or "unknown", cap_msg.capabilities)
-                    ExecutorRegistry.get_instance().on_device_authenticated(
-                        device_id=device_id,
-                        capabilities=cap_msg.capabilities,
-                        platform=cap_msg.platform or "unknown",
-                        device_type=cap_msg.device_type,
-                        agent_version=cap_msg.agent_version,
-                        transports=cap_msg.transports,
-                    )
+                    accepted = reconcile(ExecutorRegistry.get_instance(),device_id,cap_msg.discovery,
+                        legacy_names=cap_msg.capabilities)
+                    await update_device_capabilities(device_id,cap_msg.platform or 'unknown',accepted)
                 elif envelope.type == "status":
                     msg = StatusMessage(**data)
                     log.info(f"[{device_id}] Status: {msg.status}")
@@ -889,6 +900,8 @@ async def agent_endpoint(websocket: WebSocket, device_id: str):
 
                 elif envelope.type == "result":
                     msg = ResultMessage(**data)
+                    from .discovery import record_verified_result
+                    await record_verified_result(device_id,msg)
                     icon = "✓" if msg.status == "success" else "✗"
                     log.info(
                         f"[{device_id}] {icon} {msg.command} → {msg.status}: {msg.message}"
@@ -964,6 +977,10 @@ async def agent_endpoint(websocket: WebSocket, device_id: str):
                 else:
                     log.warning(f"[{device_id}] Unknown message type: {envelope.type}")
             except Exception as e:
+                if envelope.type == 'capability_advertisement':
+                    log.warning('discovery_rejected device=%s reason=%s',device_id,type(e).__name__)
+                    await websocket.send_text(json.dumps({'type':'discovery_rejected','reason':'invalid_advertisement'}))
+                    continue
                 import traceback
                 log.error(f"HUB CRASH ROOT CAUSE | Exception in websocket message loop: {e}\n{traceback.format_exc()}")
 
@@ -1201,6 +1218,8 @@ async def cli_endpoint(websocket: WebSocket):
                 continue
 
             try:
+                from .discovery import guard_dispatch
+                await guard_dispatch(device_id,command)
                 await target_ws.send_text(cmd_msg.model_dump_json())
                 await update_command_status(cmd_msg.command_id, "dispatched")
                 log.info(f"CLI[{sender_id}] → [{device_id}] command: {command} {args} (id={cmd_msg.command_id[:8]}…)")
@@ -1325,6 +1344,8 @@ async def _start_confirmation_flow(
 
         cmd_msg = CommandMessage(command_id=command_id, command=command, args=args)
         try:
+            from .discovery import guard_dispatch
+            await guard_dispatch(target_device,command)
             await target_ws.send_text(cmd_msg.model_dump_json())
             await update_command_status(command_id, "dispatched")
             log.info(f"✓ Confirmed → [{target_device}] {command} (id={command_id[:8]}…)")
@@ -1485,4 +1506,9 @@ app.include_router(speakers_router)
 from .api_control import router as control_router, control_websocket_endpoint
 app.include_router(control_router)
 app.add_api_websocket_route("/ws-control", control_websocket_endpoint)
+
+from .api_workspace import router as workspace_router
+from .api_discovery import router as discovery_router
+app.include_router(discovery_router)
+app.include_router(workspace_router)
 

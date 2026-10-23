@@ -179,6 +179,50 @@ async def test_cancel_task_cancels_agent_turn_and_unknown_id_is_404():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["COMPLETED", "FAILED", "CANCELLED", "DENIED", "interrupted"])
+async def test_stale_legacy_cancel_preserves_durable_outcome(status):
+    from hub import api_control
+    from hub.database import add_task, get_task
+    from hub.agent_turn import AgentTurn
+    from hub.request_lifecycle import RequestLifecycle
+    await add_task({"id": "finished-request", "type": "request", "title": "Finished",
+        "command": "request", "status": status,
+        "context": {"result": {"status": "success", "message": "Recorded outcome"}}})
+    before = await get_task("finished-request")
+    with patch.object(AgentTurn, "cancel_task") as turn, \
+         patch.object(RequestLifecycle, "cancel_task") as request, \
+         patch.object(api_control, "broadcast_control", AsyncMock()) as broadcast:
+        with pytest.raises(HTTPException) as error:
+            await api_control.stop_task_endpoint("finished-request")
+    assert error.value.status_code == 409
+    assert await get_task("finished-request") == before
+    turn.assert_not_called()
+    request.assert_not_called()
+    broadcast.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["goal", "execution"])
+@pytest.mark.parametrize("status", ["COMPLETED", "FAILED"])
+async def test_stale_cancel_does_not_reopen_goals_or_execution_receipts(kind, status):
+    from hub import api_control
+    goal = SimpleNamespace(status=status) if kind == "goal" else None
+    execution = SimpleNamespace(execution_state=status) if kind == "execution" else None
+    goals = SimpleNamespace(get_goal=AsyncMock(return_value=goal), cancel_goal=AsyncMock())
+    ownership = SimpleNamespace(get_execution=AsyncMock(return_value=execution), expire_lease=AsyncMock())
+    with patch.object(api_control.GoalManager, "get_instance", return_value=goals), \
+         patch.object(api_control.TaskOwnershipManager, "get_instance", return_value=ownership), \
+         patch("hub.database.get_task", AsyncMock(return_value=None)):
+        with pytest.raises(HTTPException) as error:
+            await api_control.stop_task_endpoint("already-ended")
+    assert error.value.status_code == 409
+    goals.cancel_goal.assert_not_awaited()
+    ownership.expire_lease.assert_not_awaited()
+    if execution:
+        assert execution.execution_state == status
+
+
+@pytest.mark.asyncio
 async def test_http_kill_switch_cancels_agent_turns():
     from hub import api_control
     from hub.agent_turn import AgentTurn

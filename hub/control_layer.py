@@ -139,6 +139,8 @@ class CortexControlLayer:
 
         if latency_metrics is None:
             latency_metrics = {}
+        from .discovery import guard_dispatch
+        await guard_dispatch(target_device, action)
         latency_metrics["control_layer_start"] = time.monotonic()
         
         if not cmd_id:
@@ -208,6 +210,13 @@ class CortexControlLayer:
             args = actual_args
         if args is None:
             args = {}
+        from .capability_registry import CanonicalCapabilityRegistry
+        definition = CanonicalCapabilityRegistry.get_instance().get_capability(action)
+        if definition and definition.target_type == 'device':
+            from .discovery import guard_dispatch
+            try: await guard_dispatch(target_device, action)
+            except ValueError as exc:
+                return {'status':'failure','message':str(exc),'error':'capability_unavailable'}
 
         if is_autonomous:
             from .goals import GoalManager
@@ -625,6 +634,10 @@ class CortexControlLayer:
         try:
             await self.execute_command(target_device, action, args, cmd_id=cmd_id)
             res = await asyncio.wait_for(fut, timeout=timeout)
+            if getattr(res, 'status', None) == 'success' and getattr(res, 'command', None) == action:
+                from .discovery import mark_verified
+                from .executor_registry import ExecutorRegistry
+                mark_verified(ExecutorRegistry.get_instance(),target_device,action)
             # Persist screenshot reference if action captured a screen
             msg_str = getattr(res, "message", "") if not isinstance(res, dict) else res.get("message", "")
             res_data = getattr(res, "data", None) if not isinstance(res, dict) else res.get("data")

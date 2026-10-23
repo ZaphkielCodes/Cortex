@@ -1015,44 +1015,11 @@ def get_capabilities() -> list[str]:
     """
     Dynamically determine which capabilities this agent supports at runtime.
     """
-    caps = [
-        "transfer.inspect",
-        "transfer.send",
-        "app.list_running",
-        "process.list",
-        "app.launch",
-        "app.close",
-        "window.list",
-        "window.focus",
-        "window.minimize",
-        "window.maximize",
-        "window.restore",
-        "fs.open",
-        "fs.copy",
-        "fs.move",
-        "fs.rename",
-        "fs.delete",
-        "fs.list",
-        "fs.stat",
-        "fs.shortcut_info",
-        "browser.open_url",
-        "device.status",
-        # Phase A10 UI capabilities
-        "ui.observe",
-        "ui.click",
-        "ui.double_click",
-        "ui.right_click",
-        "ui.move_pointer",
-        "ui.scroll",
-        "ui.type",
-        "ui.keypress",
-        "ui.hotkey",
-        "ui.drag",
-        "ui.select",
-        "ui.wait",
-        "clipboard.read",
-        "clipboard.write",
-    ]
+    # Derive support from actual registered dispatch functions, rather than a
+    # second manually maintained per-device capability list.
+    caps = [name for name, handler in HANDLERS.items() if '.' in name and callable(handler)
+            and name not in {'screen.capture','ui.screenshot','screenshot.read','ui.notify'}]
+    caps.extend(['transfer.inspect','transfer.send'])  # Authenticated session handlers.
 
     # Check screenshot support
     try:
@@ -1083,5 +1050,5 @@ def get_capabilities() -> list[str]:
     if suppressed:
         caps = [c for c in caps if c not in suppressed]
 
-    return caps
+    return sorted(set(caps))
 

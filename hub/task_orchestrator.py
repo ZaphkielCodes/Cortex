@@ -74,6 +74,16 @@ class TaskOrchestrator:
         tasks = await get_tasks()
         count = 0
         for t in tasks:
+            if t.get('type') == 'orchestration_worker':
+                if t['status'] in {'PENDING', 'RUNNING', 'WAITING'}:
+                    from .orchestration import recover_worker
+                    await recover_worker(t)
+                continue
+            if t.get('type') == 'orchestration':
+                if t['status'] in {'RUNNING', 'WAITING'}:
+                    from .orchestration import recover_graph
+                    await recover_graph(t)
+                continue
             if t.get("type") in {"agent_turn", "request"}:
                 from .session_context import SessionContextManager
                 try:

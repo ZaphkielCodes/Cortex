@@ -1,0 +1,146 @@
+{
+  "$defs": {
+    "Node": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 48,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "role": {
+          "maxLength": 48,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",
+          "title": "Role",
+          "type": "string"
+        },
+        "objective": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Objective",
+          "type": "string"
+        },
+        "kind": {
+          "default": "reasoning",
+          "enum": [
+            "reasoning",
+            "capability"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "dependencies": {
+          "items": {
+            "maxLength": 48,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "memory_keys": {
+          "items": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "title": "Memory Keys",
+          "type": "array"
+        },
+        "required_capabilities": {
+          "items": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 6,
+          "title": "Required Capabilities",
+          "type": "array"
+        },
+        "target_device": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Device"
+        },
+        "output_type": {
+          "default": "text",
+          "enum": [
+            "text",
+            "number",
+            "boolean"
+          ],
+          "title": "Output Type",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "timeout_seconds": {
+          "default": 90,
+          "maximum": 120,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "success_criteria": {
+          "items": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "title": "Success Criteria",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "objective",
+        "success_criteria"
+      ],
+      "title": "Node",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Protocol Version",
+      "type": "integer"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/Node"
+      },
+      "maxItems": 8,
+      "minItems": 2,
+      "title": "Nodes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "nodes"
+  ],
+  "title": "TaskGraph",
+  "type": "object"
+}

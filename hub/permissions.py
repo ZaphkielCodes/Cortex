@@ -89,6 +89,7 @@ ROLE_PERMISSIONS: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 
 COMMAND_TIERS: dict[str, int] = {
+    "agent.orchestrate": 1,
     "hub.transfer_file": 2,
     "transfer.inspect": 1,
     "transfer.prepare": 2,
@@ -275,6 +276,7 @@ async def check_permission(
     sender_id: str,
     target_id: str,
     command: str,
+    *, include_support: bool = True,
 ) -> PermissionResult:
     """
     Check whether a device with `sender_role` and `sender_id` is allowed
@@ -320,8 +322,14 @@ async def check_permission(
     from .capability_registry import CanonicalCapabilityRegistry
     schema = CanonicalCapabilityRegistry.get_instance().get_capability(command)
     hub_owned = schema is not None and schema.target_type == "hub"
+    if include_support and not hub_owned:
+        from .discovery import eligibility
+        from .executor_registry import ExecutorRegistry
+        discovered = eligibility(ExecutorRegistry.get_instance(), target_id, command)
+        if discovered not in (None, 'ELIGIBLE'):
+            return PermissionResult(allowed=False,needs_confirmation=False,tier=tier,reason=discovered)
     capabilities = await get_device_capabilities(target_id)
-    if not hub_owned and command not in capabilities:
+    if include_support and not hub_owned and command not in capabilities:
         return PermissionResult(
             allowed=False,
             needs_confirmation=False,

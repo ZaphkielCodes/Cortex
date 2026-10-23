@@ -150,3 +150,40 @@ async def test_browser_login_cookie_authenticates_integrations_after_refresh(env
         assert (await client.get('/integrations/')).status_code == 200
         await client.post('/logout')
         assert (await client.get('/integrations/')).status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['invalid_arguments', 'provider_error'])
+async def test_agentturn_reports_integration_failures_without_executor_type_error(env, kind):
+    from test_agent_turn_runtime import ScriptedModel, call, control
+    from hub.agent_turn import AgentTurn
+    if kind == 'invalid_arguments':
+        await env.connect(service='calendar', scopes=[G+'calendar.events.readonly'])
+        proposal=call('calendar.list', time_min='2026-10-21', time_max='2026-10-28')
+        expected='INVALID_ARGUMENT'
+    else:
+        await env.connect()
+        adapter(env, 'google_gmail', lambda request: httpx.Response(503))
+        proposal=call('email.search', query='fixture')
+        expected='PROVIDER_UNAVAILABLE'
+    agent=AgentTurn(control([]), ScriptedModel([proposal]))
+    result=await agent.run('Run the requested read', 'asus', {'response_channel':'gui'})
+    if result.is_async:
+        result=await AgentTurn._running[result.task_id]
+        await asyncio.gather(*list(AgentTurn._running.values()))
+    assert result.status == 'error' and expected in result.message
+    assert result.data['integration_error']['category'] == expected
+    assert result.data.get('error_code') != 'agent_runtime_error'
+    if kind == 'invalid_arguments':
+        issues=result.data['integration_error']['validation_issues']
+        assert issues and '2026-10-21' not in json.dumps(issues)
+
+
+def test_calendar_time_schema_declares_the_existing_timezone_requirement():
+    from hub.integrations.definitions import definitions
+    for cap in definitions():
+        if cap.capability_id.startswith('calendar.'):
+            fields=cap.argument_schema()['properties']
+            for key in ('time_min','time_max') if cap.capability_id == 'calendar.list' else ('start','end'):
+                assert fields[key]['format'] == 'date-time'
+                assert 'timezone' in fields[key]['description']

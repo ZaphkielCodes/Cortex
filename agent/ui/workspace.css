@@ -1,0 +1,14 @@
+.dynamic-workspace { padding: 20px; border: 1px solid #25314a; border-radius: 16px; background: #0a1020; color: #dfe8f7; }
+.workspace-heading, .workspace-task header { display: flex; gap: 16px; align-items: center; justify-content: space-between; }
+.workspace-item { margin: 12px 0; padding: 16px; border: 1px solid #25314a; border-radius: 10px; overflow-wrap: anywhere; }
+.workspace-item h3, .workspace-item h4 { margin: 0 0 10px; }
+.workspace-item p { white-space: pre-wrap; margin: 10px 0; }
+.workspace-item progress { width: 100%; accent-color: #52c8ed; }
+.workspace-item small { display: block; color: #98b0cb; margin-top: 6px; }
+.workspace-item summary { cursor: pointer; }
+.workspace-item li { margin: 10px 0; }
+.workspace-table { overflow-x: auto; }
+.workspace-table table { width: 100%; border-collapse: collapse; text-align: left; }
+.workspace-table th, .workspace-table td { padding: 8px; border-bottom: 1px solid #25314a; }
+.workspace-item[role="alert"] { border-color: #a95361; }
+@media (max-width: 700px) { .workspace-heading, .workspace-task header { align-items: flex-start; flex-direction: column; } }

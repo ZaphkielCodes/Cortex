@@ -1,0 +1,46 @@
+{
+  "passed": 945,
+  "failed": 2,
+  "skipped": 0,
+  "xfailed": 0,
+  "exit_code": 1,
+  "python": "3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "frozen": {
+    "hub/agent_turn.py": true,
+    "hub/direct_router.py": true,
+    "hub/provider_failover.py": true,
+    "hub/failover_budget.py": true,
+    "hub/compound_ui.py": true,
+    "hub/compound_recovery.py": true,
+    "scripts/run_compound_acceptance.ps1": true,
+    "scripts/live_benchmark.py": true,
+    "scripts/acceptance_review.py": true,
+    "benchmarks/a10_compound_acceptance.json": true,
+    "tests/conftest.py": true
+  },
+  "duration_seconds": 242.72,
+  "failures": [
+    {
+      "test": "tests.test_peer_transfer_orchestration::test_coordinator_uses_workers_and_real_tls_without_reading_source",
+      "message": "AssertionError: assert 'failure' == 'success'\n  \n  - success\n  + failure"
+    },
+    {
+      "test": "tests.test_peer_transfer_wire::test_tls_wire_multichunk_resume_integrity_and_no_overwrite",
+      "message": "PermissionError: Peer rejected transfer"
+    }
+  ],
+  "warnings": [
+    "google.genai.types: _UnionGenericAlias deprecated, removal Python 3.17",
+    "starlette.testclient: anyio.abc.BlockingPortal alias deprecated"
+  ],
+  "environment_limitation": {
+    "hardlink_probe": {
+      "hardlink": "failed",
+      "exception": "PermissionError",
+      "winerror": 5,
+      "errno": 13
+    },
+    "interpretation": "Sandbox hard-link denial is consistent with transfer finish failures. Receiver suppresses original exception; exact causal attribution for both tests is not proven."
+  }
+}

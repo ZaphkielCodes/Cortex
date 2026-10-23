@@ -160,6 +160,12 @@ class DeviceHandle:
 
     def supports_capability(self, capability: str) -> bool:
         """Check whether this device advertises a specific capability."""
+        discovered = self.metadata.get('capability_discovery')
+        if discovered:
+            import time
+            entry = discovered['entries'].get(capability)
+            if time.monotonic() >= discovered['expires_mono'] or not entry or not entry['compatible'] or entry['advertisement']['availability'] == 'unavailable':
+                return False
         if not capability or not self.capabilities:
             return False
         if capability in self.capabilities:

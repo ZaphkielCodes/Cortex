@@ -1,4 +1,5 @@
 import IntegrationStatus from "./IntegrationStatus.jsx";
+import DynamicWorkspace from "./DynamicWorkspace.jsx";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { CortexOrb } from "./CortexOrb.jsx";
 import { createControlClient, humanStatus } from "./control-client.js";
@@ -30,7 +31,7 @@ function Icon({ name, size = 20 }) {
 
 
 
-const NAV = [["Overview", "grid"], ["Devices", "device"], ["Automations", "bolt"],
+const NAV = [["Overview", "grid"], ["Workspace", "grid"], ["Devices", "device"], ["Automations", "bolt"],
   ["Memory", "brain"], ["Activity", "pulse"], ["Security", "shield"], ["Settings", "settings"]];
 const terminal = isTerminalStatus;
 const date = value => value ? new Date(value).toLocaleString() : "Not reported";
@@ -145,6 +146,7 @@ export default function CortexDashboard() {
       setChat(previous => [...previous.slice(-29), { id: crypto.randomUUID(), text, response: result.response_text,
         status: result.status, task_id: result.task_id || result.data?.task_id, target: selected, source: runtime.device_id }]);
       setCommand(""); await refreshRef.current();
+      go("Workspace");
     } catch (problem) { setError(problem.message); }
     finally { setBusy(""); }
   }
@@ -185,6 +187,10 @@ export default function CortexDashboard() {
       <div className="workspace">
         {(error || connectionError) && <div className="feedback error" role="alert"><span>{error || connectionError}{!connected && syncedAt ? " Displaying the last received snapshot." : ""}</span><button onClick={() => { setError(""); refreshRef.current(); }}>Retry</button></div>}
         {notice && <div className="feedback" role="status">{notice}<button aria-label="Dismiss notification" onClick={() => setNotice("")}>×</button></div>}
+        {page === "Workspace" && <>
+          <form className="command-bar" onSubmit={submit}><label><span>REQUEST · {runtime.device_id || "OFFLINE"}</span><input ref={input} value={command} onChange={e => setCommand(e.target.value)} placeholder="Ask Cortex to do something…" aria-label="Workspace request"/></label><button className="send" disabled={!connected || !!busy || !command.trim()} aria-label="Send workspace request"><Icon name="send"/></button></form>
+          <DynamicWorkspace request={request} voiceState={voiceState} voiceConnected={runtime.ipc_connected}/>
+        </>}
         {page === "Overview" && <>
           <div className="orb-stage"><div className="stage-grid"/><div className="orb-meta"><span>CORTEX CORE</span><span>{connected ? "HUB CONNECTED" : "AWAITING CONNECTION"}</span></div>
             <CortexOrb status={reduceMotion ? "idle" : status} emotion="neutral" audioLevel={reduceMotion ? 0 : audioLevel} eye onPoke={() => voice("push_to_talk")}/>
