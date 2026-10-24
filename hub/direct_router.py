@@ -198,6 +198,10 @@ class TurnRoute(LLMProvider):
         # Each call is a reasoning turn. Successful OS actions stay owned by AgentTurn.
         fallback=ctx.get("allow_provider_fallback",True) and self.authorized_key is None
         allowed=self.router.routes if fallback else [r for r in self.router.routes if r.provider is self.primary]
+        from .decision_retry import current_decision
+        correction = current_decision.get()
+        if correction and correction.invalid:
+            allowed = [r for r in allowed if (r.provider.name,r.provider.model)==correction.selected]
         attempted,excluded,retries=set(),set(),{}
         failures=[]
         safe_waits={}
@@ -281,12 +285,18 @@ class TurnRoute(LLMProvider):
             started=time.monotonic()
             attempted_actual.add(key)
             try:
+                if correction:
+                    correction.select(provider,ctx)
                 async with asyncio.timeout(timeout):
                     result=await provider.generate_result(user_text,dict(ctx,_router_timeout_seconds=timeout))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 failure=self.router.failover.classify(exc)
+                if correction and failure.category == "INVALID_OUTPUT":
+                    # AgentTurn owns the single corrective retry. No fallback/cooldown
+                    # may consume or evade that proposal budget. Never echo bodies.
+                    raise ValueError("invalid_model_proposal") from None
                 status=self.router.failover.http_status(exc)
                 failures.append((failure.category,status))
                 route.last_failure_category=failure.category

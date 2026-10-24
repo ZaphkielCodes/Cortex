@@ -105,8 +105,8 @@ async def test_repair_budget_exhaustion_never_dispatches():
     from model_contract_fixtures import scripted_harness,call
     harness,ctrl,model=scripted_harness([call("invented.capability")]*4)
     result=await harness.process_request("asus","A generic action request",{})
-    assert result.status=="error" and len(model.calls)==4
-    assert result.data["error_code"]=="recovery_exhausted"
+    assert result.status=="error" and len(model.calls)==2
+    assert result.data["error_code"]=="corrective_retry_exhausted"
     ctrl.execute_and_observe.assert_not_awaited()
 
 

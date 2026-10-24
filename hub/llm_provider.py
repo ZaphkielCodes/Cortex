@@ -481,6 +481,9 @@ class GeminiLLMProvider(LLMProvider):
         import asyncio
         from .config import get_lane_deadlines
 
+        if os.getenv("CORTEX_BUDGET_CONFIG") and on_chunk is not None:
+            from .cost_accounting import denied
+            raise denied()  # Streaming usage contract is not yet supported.
         client = self._get_client()
 
         # Build a safe context summary (no secrets)
@@ -676,8 +679,8 @@ class GeminiLLMProvider(LLMProvider):
                 log.info(f"[Latency] Gemini request end (error): {time.monotonic() - t0:.3f}s")
                 raise
 
-        async def _call_gemini():
-            response = await client.aio.models.generate_content(
+        async def _sdk_request():
+            return await client.aio.models.generate_content(
                 model=self._model_name,
                 contents=user_message,
                 config={
@@ -686,9 +689,13 @@ class GeminiLLMProvider(LLMProvider):
                     "max_output_tokens": 2048 if mode_agent_decision else 512,
                     **({"response_mime_type": "application/json"} if mode_agent_decision else {}),
                     **({"http_options":{"timeout":int(deadline_total*1000),"retry_options":{"attempts":1}}}
-                       if context.get("router_managed_retries") and context.get("_router_timeout_seconds") else {}),
+                       if os.getenv("CORTEX_BUDGET_CONFIG") or (context.get("router_managed_retries") and context.get("_router_timeout_seconds")) else {}),
                 },
             )
+        async def _call_gemini():
+            from .cost_accounting import metered_gemini
+            response = await metered_gemini(self,context,system_inst+user_message,
+                2048 if mode_agent_decision else 512,_sdk_request)
             return response.text
 
         try:

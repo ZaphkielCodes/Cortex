@@ -167,7 +167,9 @@ class DirectLLMProvider(LLMProvider):
             metrics["model_request_started"] = started
         try:
             async with asyncio.timeout(timeout):
-                async with httpx.AsyncClient(transport=self.transport, trust_env=False,
+                from .cost_accounting import configured_transport
+                transport = configured_transport(self.name, self.model, self.transport, context)
+                async with httpx.AsyncClient(transport=transport, trust_env=False,
                                              follow_redirects=False, timeout=timeout) as client:
                     response = await client.post(self.endpoint, headers={
                         "Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}, json=payload)
@@ -243,6 +245,7 @@ class DirectLLMProvider(LLMProvider):
                                     response.status_code, error.provider_error_code)
                         raise error
                     body = response.json()
+                    self.last_usage = body.get("usage")
                     choices = body.get("choices") or []
                     choice = choices[0] if choices else {}
                     native_proposal=bool(payload.get("tools"))

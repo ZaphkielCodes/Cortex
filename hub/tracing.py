@@ -261,9 +261,17 @@ class _AttemptTrace:
 
 
 def observe_model_attempt(method):
-    """Instrumentation only: arguments/results/errors and routing remain unchanged."""
+    """Observe attempts; budgeted mode rejects transports without accounting."""
     @functools.wraps(method)
     async def wrapped(provider, user_text, context, *args, **kwargs):
+        import os
+        if os.getenv("CORTEX_BUDGET_CONFIG") and provider.name not in {"groq", "nvidia", "gemini"}:
+            from .cost_accounting import denied
+            raise denied()  # No unaccounted SDK fallback in budgeted mode.
+        from .decision_retry import current_decision
+        correction = current_decision.get()
+        if correction:
+            correction.select(provider,context)
         trace = context.get("trace")
         metrics = context.get("latency_metrics")
         local_metrics = {} if metrics is not None else None

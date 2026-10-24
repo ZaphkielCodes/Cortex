@@ -1,0 +1,20 @@
+# Unavoidable compatibility issue identified before frozen changes
+
+Session 2 update: see [session report](stage1-session2.md), [current accounting](stage1-accounting.md), and [executable runner](stage1-benchmark-runner.md). Session 1 inspection limitations below are historical; selection thresholds and task definitions are unchanged.
+No frozen edits in this session. A10/A10.5 hashes remain an acceptance check.
+
+Evidence: hub/provider_failover.py FailoverManager.MAX_ATTEMPTS=6, MAX_SAFE_RETRIES=2; classify maps ValueError/INVALID_OUTPUT and tool_use_failed to retryable failures. hub/direct_router.py catches these and can proceed to another eligible provider. hub/agent_turn.py catches rejected proposals and calls runtime.recover; it does not impose one global corrective proposal retry. Frozen compound_recovery.RECOVERY_LIMITS currently allows three CAPABILITY_REJECTED and three ARGUMENT_SCHEMA_REJECTED recoveries. A test characterizes this policy rather than falsely claiming compliance.
+
+Required follow-up before paid evaluation: define one correction budget per logical decision, shared across transport/router and AgentTurn validation; no action dispatch for rejected proposals; same eligible recipient/model for correction; preserve remaining deadline, price admission and user privacy; a second malformed proposal terminates truthfully without alternate-provider evasion. Evidence from schema validation should be structured error types/paths, not echoed content. Transient transport retry remains separately bounded by existing limits but every call is charged/reserved.
+
+Changing only the leaf direct provider cannot safely constrain validation done later in frozen AgentTurn or router fallback. A narrow reviewed patch to these frozen boundaries, with explicit compatibility tests, is therefore needed. Do not alter unrelated routing rank, privacy, cooldowns or compound execution. This first session records the incompatibility; it does not reopen A14 or silently change the frozen contract.
+
+## Session 2 authorized exception
+
+The user's Session 2 instruction expressly authorizes the smallest compatibility repair. Only hub/agent_turn.py and hub/direct_router.py change among the eleven frozen sources. Exact pre/post SHA-256 values are in stage1-session2-frozen-hashes.json; the other nine are checked in the consolidated result.
+
+AgentTurn owns a DecisionRetry per proposed decision, spanning JSON/schema/canonical argument validation and existing bounded recovery. The first rejection permits one correction, the second returns corrective_retry_exhausted before dispatch. A valid decision advances to a new decision scope. Both proposals remain inside the existing task deadline and existing provider timeouts; no extra time allowance or new timeout policy is introduced. Existing execution policies, success verification and the compound recovery limits are not weakened.
+
+The router forwards INVALID_OUTPUT to that same correction scope before failover. The correction restricts candidates to the provider/model that produced the invalid proposal; current eligibility and privacy checks still apply. A shared leaf observer rejects recipient/model/privacy changes, and existing AgentTurn approval-route checks run again before each proposal. Transport failures remain governed by existing bounded transient policies, but cannot switch the recipient during a correction. Missing eligibility terminates truthfully. Each actual paid transport attempt requires a separate reservation.
+
+No edits to provider_failover.py, compound_recovery.py or A14. Standalone non-AgentTurn routing retains its historical INVALID_OUTPUT policy; paid evaluation uses RequestPipeline/AgentTurn. Focused tests cover malformed JSON, invalid capability arguments, no rejected dispatch, second-invalid termination, same model correction, corrective transport failure, privacy/recipient rejection and per-attempt fallback accounting. The old standalone FailoverManager characterization remains visible; it is not evidence of an AgentTurn bypass.

@@ -170,14 +170,25 @@ async def _build_capability_catalog(source):
 
 
 async def _get_model_decision(utterance, catalog, state, history, provider, allow_provider_fallback=True):
+    from .decision_retry import DecisionRetry
+    retry = state.get("_decision_retry") or DecisionRetry()
+    with retry.scope():
+        return await _decision_proposal(utterance,catalog,state,history,provider,allow_provider_fallback)
+
+
+async def _decision_proposal(utterance, catalog, state, history, provider, allow_provider_fallback=True):
     proposal_schema=AgentDecision.model_json_schema()
     proposal_schema["properties"]["capability"]["enum"]=[entry["name"] for entry in catalog]+[None]
+    retry = state.get("_decision_retry")
+    state = {k:v for k,v in state.items() if k != "_decision_retry"}
     result = await provider.generate_result(utterance, {
         "decision_schema":proposal_schema,
         "mode": "agent_decision", "system_prompt": _build_agent_system_prompt(catalog, state),
         "conversation_history": history, "routing_lane": "STRUCTURED_MODEL", "operational_task_id":state.get("task_id"),
         "allow_provider_fallback": allow_provider_fallback, "task_profile":state.get("task_profile",{}),
         "privacy_class":state.get("privacy_class","INTERNAL"), "request_id":state.get("request_id")})
+    if retry and retry.selected is None:
+        retry.select(provider,{"privacy_class":state.get("privacy_class","INTERNAL")})
     raw = result if isinstance(result, str) else result.response_text
     if not raw:
         raise ValueError("empty_decision")
@@ -733,6 +744,8 @@ class AgentTurn:
         inspected_capabilities = []
         actions = 0
         repairs = 0
+        from .decision_retry import DecisionRetry
+        correction = DecisionRetry()
         validation_feedback = None
         pending_ui_verification = set()
         pending_text = {}
@@ -752,7 +765,7 @@ class AgentTurn:
             proposal_name = None
             try:
                 decision = AgentDecision(decision="CALL_CAPABILITY",capability="ui.observe",arguments=refresh) if refresh is not None else await _get_model_decision(utterance, catalog,
-                    {"task_id":task_id, "source_device": source, "requested_device": context.get("requested_device"),
+                    {"task_id":task_id, "_decision_retry":correction, "source_device": source, "requested_device": context.get("requested_device"),
                      "context": reasoning_context, "tool_results": compress_evidence(evidence),
                      "inspected_capabilities": inspected_capabilities,
                      "unavailable_capabilities": [entry["name"] for entry in catalog if not entry["available"]],
@@ -793,6 +806,16 @@ class AgentTurn:
                          if isinstance(proposal_error,ValidationError) else str(proposal_error)[:200])
                 rejected_name = proposal_name or getattr(decision,"capability",None)
                 registered = CanonicalCapabilityRegistry.get_instance().get_capability(rejected_name) if isinstance(rejected_name,str) else None
+                if not correction.reject():
+                    details = {"error_code":"corrective_retry_exhausted"}
+                    status, message = "error", "The AI returned a second invalid proposal. No action was sent for either rejected proposal."
+                    if registered and not registered.availability:
+                        status, message = "unsupported", "The required capability is unavailable. Two rejected proposals were stopped without execution."
+                        details.update(reason="capability_unavailable",capability=registered.name)
+                    elif str(proposal_error) == "executor_capability_unavailable":
+                        message = "The requested capability is unsupported on " + executor.device_id + ". Two rejected proposals were stopped without execution."
+                        details.update(reason="executor_capability_unavailable",capability=rejected_name)
+                    return AgentTurnResult(status,message,data=details)
                 category = "ARGUMENT_SCHEMA_REJECTED" if registered and registered.availability and str(proposal_error) != "executor_capability_unavailable" else "CAPABILITY_REJECTED"
                 failure = await runtime.recover(category,capability=rejected_name,details={"proposal_rejected_before_execution":True,"issue":issue,
                     "target_device":context.get("requested_device") or (decision.arguments.get("target_device") if decision else None) or source})
@@ -806,6 +829,8 @@ class AgentTurn:
                     "instruction":"Inspect an exact registered schema and submit a valid decision. No action was sent for the rejected proposal."}
                 log.warning("agent_decision_repair task_id=%s attempt=%s action_replay=false",task_id,repairs)
                 continue
+            correction = DecisionRetry()
+            validation_feedback = None
             if decision.routing_hints:
                 self._routing_task.update(decision.routing_hints.model_dump())
             selected_name = decision.capability or (decision.plan_steps[0].get("capability") if decision.plan_steps else None)

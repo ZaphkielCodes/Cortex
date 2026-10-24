@@ -1,0 +1,9 @@
+{
+  "benchmarks/v1-single-agent-20.json": "5c9898c3038e532bcf055afaa0d30ec09ac6c301ffc6faa113e30328f206fb62",
+  "benchmarks/v1/fixtures.json": "5042025e75174c31d11f8338248dab17281aa10b3196d4207478ec800cce4106",
+  "benchmarks/v1/held-out.json": "29fbeb1ba647ea9392ed78a5e0deff21655babfe8e8278e9b3d07284fbce8ebc",
+  "docs/v1/stage1-evaluation.md": "0fd69ce0c982d9d2934031c8dc7982e13a565ba562fcb945afc617ced33b783d",
+  "docs/v1/stage1-benchmark-runner.md": "2a59c41562aaa7aeb76c913e8a3a602fc47b93f8539e6860580f5517853c7536",
+  "scripts/evaluate_v1.py": "97f73e6c08fe045c2b4ea38040961cd1ba685ff0cf4acabf3432e0a9250c18bc",
+  "scripts/score_v1.py": "d1d351a07c8ffea93ca5bb8d6fb2161f330bbd8e2f72c9a9de5b8a171af0dc98"
+}

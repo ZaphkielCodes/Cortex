@@ -2,7 +2,7 @@
 
 ## Active delivery plan: Cortex v1
 
-The [v1 product definition](docs/v1/product-definition.md), [roadmap](docs/v1/development-roadmap.md) and [evidence ledger](docs/v1/evidence-ledger.md) supersede A1–A14 as the delivery plan. Historical architecture remains preserved. The old 82% Goal Meter is retired. Stage 1 has not started; see the [Stage 0 audit](docs/v1/baseline-audit.md) for the measured baseline.
+The [v1 product definition](docs/v1/product-definition.md), [roadmap](docs/v1/development-roadmap.md) and [evidence ledger](docs/v1/evidence-ledger.md) supersede A1–A14 as the delivery plan. Historical architecture remains preserved. The old 82% Goal Meter is retired. Stage 1 is in progress: see the [evaluation specification](docs/v1/stage1-evaluation.md). No paid evaluation or model selection has occurred. See the [Stage 0 audit](docs/v1/baseline-audit.md) for the frozen baseline.
 
 Cortex is a Windows-first, cross-device personal computing assistant. A Python hub coordinates a desktop agent, a React/PyQt interface, voice providers, and enrolled devices.
 

@@ -1,0 +1,25 @@
+{
+  "unpublished_history": {
+    "unpublished_commits": [
+      "880973853a1a984375682b3f46c4636dedbdc38e",
+      "99d2173ffe821a2de02c8568fe02bf7e6aa21c78"
+    ],
+    "unique_blobs_scanned": 407,
+    "exact_local_credential_matches": [],
+    "sensitive_path_findings": [],
+    "limitations": "Exact current local credential comparison and sensitive paths; no keyring export or guarantee of unknown secret absence."
+  },
+  "staged_review": {
+    "staged_files": 31,
+    "exact_current_credential_matches": [],
+    "sensitive_paths": [],
+    "worktree_index_mismatches": [],
+    "benchmark_freeze_matches": true,
+    "limits": "Known credential and path scan; no export of OS keyring and no guarantee for unknown secrets."
+  },
+  "pattern_scan": {
+    "candidate_count": 406,
+    "findings": "Eight existing synthetic test credentials/redaction canaries; no new matches in Stage 1 files."
+  },
+  "excluded": "Credentials, private runtime/ledger databases, logs, screenshots, environment files, dependency/build output. No billing settings changed."
+}

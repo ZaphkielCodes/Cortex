@@ -122,18 +122,17 @@ async def test_unavailable_executor_capability_is_rejected_before_execution():
 
 
 @pytest.mark.asyncio
-async def test_repeated_invalid_capabilities_fail_after_independent_bounded_corrections():
+async def test_repeated_invalid_capabilities_stop_after_one_correction():
     model=ScriptedModel([call("imaginary.change")]*5)
     ctrl=control([])
     result=await AgentTurn(ctrl,model).run("Prepare the invented pane","asus",{})
-    assert result.status=="error" and result.data["error_code"]=="recovery_exhausted"
-    assert result.data["recovery_category"]=="CAPABILITY_REJECTED"
+    assert result.status=="error" and result.data["error_code"]=="corrective_retry_exhausted"
     ctrl.execute_and_observe.assert_not_awaited()
-    assert len(model.calls)==4
+    assert len(model.calls)==2
 
 
 @pytest.mark.asyncio
-async def test_provider_failover_during_recovery_keeps_receipts_and_prevents_replay():
+async def test_corrective_provider_failure_keeps_receipts_without_recipient_change():
     from test_a10_5_routing import FakeProvider,router,error
     from hub.privacy import PrivacyPolicyEngine
     PrivacyPolicyEngine.get_instance().policy.sensitive_data_cloud_allowed=True
@@ -146,9 +145,10 @@ async def test_provider_failover_during_recovery_keeps_receipts_and_prevents_rep
     ctrl=control([{"status":"success","command_id":"receipt-once","data":{"opened":True}},
         observed("o1",element("el_done","Outcome","Ready"))])
     result=await AgentTurn(ctrl,router(primary,alternate)).run("Prepare the invented pane","asus",{"_request_task_id":"parent-marker"})
-    assert result.status=="success",result
-    assert [c.args[1] for c in ctrl.execute_and_observe.await_args_list]==["app.launch","ui.observe"]
-    assert "receipt-once" in json.dumps(alternate.received)
+    assert result.status=="error" and result.data["error_code"]=="model_provider_unavailable"
+    assert [c.args[1] for c in ctrl.execute_and_observe.await_args_list]==["app.launch"]
+    assert not alternate.received
+    assert "receipt-once" in json.dumps(primary.received)
     snapshot=await saved(result)
     assert snapshot["compound_ui"]["parent_task_id"]=="parent-marker"
     assert all(e["task_id"]==result.task_id for e in snapshot["routing_events"])
